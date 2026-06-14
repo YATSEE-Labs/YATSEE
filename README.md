@@ -205,6 +205,7 @@ yatsee config --help
 If the console script is not yet available in your environment, use:
 
 ```bash
+export PYTHONPATH=src
 python -m yatsee.cli.main --help
 ```
 

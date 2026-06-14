@@ -21,7 +21,7 @@ import random
 import re
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError, ExtractorError
@@ -29,6 +29,56 @@ from yt_dlp.utils import DownloadError, ExtractorError
 from yatsee.core.config import load_entity_config, load_global_config
 from yatsee.core.errors import ConfigError, ValidationError
 from yatsee.core.tracking import append_tracker_value, load_tracker_set
+
+
+class YouTubeDeferredError(RuntimeError):
+    """
+    Raised when a YouTube source exists but is not ready to fetch yet.
+
+    This represents a retry-later adapter state, not a hard fetch failure.
+    Scheduled livestreams and premieres can appear in channel listings before
+    downloadable media exists.
+
+    :param video_id: YouTube video ID
+    :param reason: Machine-readable deferred reason
+    :param original_error: Original yt-dlp exception
+    """
+
+    def __init__(
+        self,
+        video_id: str,
+        reason: str,
+        original_error: BaseException,
+    ) -> None:
+        self.video_id = video_id
+        self.reason = reason
+        self.original_error = original_error
+        super().__init__(f"{video_id}: {reason}: {original_error}")
+
+
+def classify_youtube_error(error: BaseException | str) -> str | None:
+    """
+    Classify known yt-dlp YouTube errors into adapter states.
+
+    yt-dlp exposes some YouTube readiness states as error text rather than
+    structured metadata. Keep string matching isolated at this boundary so the
+    rest of the adapter can use typed exceptions and machine-readable reasons.
+
+    :param error: Exception or error string from yt-dlp
+    :return: Machine-readable reason, or None for unclassified errors
+    """
+    message = str(error)
+
+    if "This live event will begin in a few moments" in message:
+        return "youtube_live_event_not_ready"
+
+    if "This live event will begin" in message:
+        return "youtube_live_event_not_ready"
+
+    if "Premieres in" in message:
+        return "youtube_premiere_not_ready"
+
+    return None
 
 
 def clean_downloaded_file(video_id: str, output_dir: str) -> str:
@@ -162,13 +212,14 @@ def get_video_upload_date(video_id: str, js_runtime: str = "deno") -> Optional[s
     :param video_id: YouTube video ID
     :param js_runtime: Selected JS runtime for yt-dlp
     :return: Upload date string or None
+    :raises YouTubeDeferredError: If the video exists but is not ready yet
     :raises RuntimeError: On yt-dlp/runtime failures
     """
     url = f"https://www.youtube.com/watch?v={video_id}"
     opts = {
         "no_warnings": True,
         "js_runtimes": {
-            js_runtime: {}
+            js_runtime: {},
         },
     }
 
@@ -180,6 +231,14 @@ def get_video_upload_date(video_id: str, js_runtime: str = "deno") -> Optional[s
                 return upload_date
             return None
     except (DownloadError, ExtractorError) as exc:
+        deferred_reason = classify_youtube_error(exc)
+        if deferred_reason:
+            raise YouTubeDeferredError(
+                video_id=video_id,
+                reason=deferred_reason,
+                original_error=exc,
+            ) from exc
+
         raise RuntimeError(f"CRITICAL: {video_id}: {exc}") from exc
     except OSError as exc:
         raise RuntimeError(f"SYSTEM_ERROR: {exc}") from exc
@@ -193,6 +252,7 @@ def download_audio(video_id: str, output_dir: str, js_runtime: str = "deno") -> 
     :param output_dir: Output directory for downloads
     :param js_runtime: JS runtime for yt-dlp
     :return: Result dictionary
+    :raises YouTubeDeferredError: If the video exists but is not ready yet
     :raises RuntimeError: If download fails
     """
     min_sleep = 3
@@ -221,7 +281,7 @@ def download_audio(video_id: str, output_dir: str, js_runtime: str = "deno") -> 
         "max_sleep_interval": max_sleep,
         "throttled_rate": throttled_rate,
         "js_runtimes": {
-            js_runtime: {}
+            js_runtime: {},
         },
         "user_agent": user_agent,
         "quiet": False,
@@ -234,6 +294,14 @@ def download_audio(video_id: str, output_dir: str, js_runtime: str = "deno") -> 
         with YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
     except (DownloadError, ExtractorError) as exc:
+        deferred_reason = classify_youtube_error(exc)
+        if deferred_reason:
+            raise YouTubeDeferredError(
+                video_id=video_id,
+                reason=deferred_reason,
+                original_error=exc,
+            ) from exc
+
         raise RuntimeError(f"CRITICAL: {video_id}: {exc}") from exc
     except Exception as exc:
         raise RuntimeError(f"SYSTEM_ERROR: {video_id}: {exc}") from exc
@@ -363,14 +431,19 @@ def run_youtube_fetch(
             "discovered": len(video_ids),
             "downloaded": 0,
             "skipped": 0,
+            "deferred": 0,
             "messages": messages,
         }
 
+    # If date-after is omitted, fetch defaults to the last 90 days.
     resolved_date_after = date_after or (datetime.today() - timedelta(days=90)).strftime("%Y%m%d")
+
+    # If date-before is omitted, fetch defaults to tomorrow.
     resolved_date_before = date_before or (datetime.today() + timedelta(days=1)).strftime("%Y%m%d")
 
     downloaded = 0
     skipped = 0
+    deferred = 0
 
     for video_id in video_ids:
         if video_id in tracked_ids:
@@ -394,7 +467,7 @@ def run_youtube_fetch(
                 messages.append(f"Reached cutoff date with {video_id} ({upload_date}); stopping.")
                 break
 
-            result = download_audio(video_id, downloads_dir, js_runtime=js_runtime)
+            download_audio(video_id, downloads_dir, js_runtime=js_runtime)
             cleaned = clean_downloaded_file(video_id, downloads_dir)
             append_tracker_value(tracker_file, video_id)
 
@@ -403,10 +476,17 @@ def run_youtube_fetch(
                 f"Downloaded {video_id}"
                 + (f" -> {cleaned}" if cleaned else "")
             )
+        except YouTubeDeferredError as exc:
+            deferred += 1
+            messages.append(f"Deferred {exc.video_id}: {exc.reason}")
+            continue
         except RuntimeError as exc:
-            if "429" in str(exc):
-                raise ConfigError("HTTP 429 detected during YouTube fetch; stopping.")
-            raise ConfigError(str(exc)) from exc
+            message = str(exc)
+
+            if "429" in message:
+                raise ConfigError("HTTP 429 detected during YouTube fetch; stopping.") from exc
+
+            raise ConfigError(message) from exc
 
     return {
         "entity": entity,
@@ -416,5 +496,6 @@ def run_youtube_fetch(
         "discovered": len(video_ids),
         "downloaded": downloaded,
         "skipped": skipped,
+        "deferred": deferred,
         "messages": messages,
     }
