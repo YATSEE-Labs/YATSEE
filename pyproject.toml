@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "AGPL-3.0-only" }
 authors = [
-  { name = "Alias454" }
+    { name = "YATSEE Labs" }
 ]
 dependencies = [
   "toml~=0.10.2",

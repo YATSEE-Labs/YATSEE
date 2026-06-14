@@ -330,7 +330,7 @@ def resolve_slice_paths(
         data_path,
         f"transcripts_{entity_cfg.get('transcription_model', global_cfg.get('system', {}).get('default_transcription_model', 'medium'))}",
     )
-    resolved_output = output_dir or os.path.join(data_path, "normalized")
+    resolved_output = output_dir or resolved_input
 
     return {
         "global_cfg": global_cfg,
