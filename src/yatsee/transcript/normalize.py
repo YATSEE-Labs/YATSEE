@@ -310,12 +310,13 @@ def process_text_to_sentences(
             sentences = [sentence.strip() for sentence in sentences]
         return "\n".join(sentences).strip() + "\n"
 
-    # Fallback mode intentionally keeps one non-empty input line per output line.
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if not lines:
-        lines = split_sentences_basic(text)
+    # Fallback mode uses regex sentence splitting. Existing line boundaries are
+    # not reliable because normalize_text() collapses transcript whitespace.
+    sentences = split_sentences_basic(text)
+    if trim_whitespace:
+        sentences = [sentence.strip() for sentence in sentences]
 
-    return "\n".join(lines).strip() + "\n"
+    return "\n".join(sentences).strip() + "\n"
 
 
 def merge_incomplete_sentences(text: str) -> str:
@@ -430,20 +431,61 @@ def apply_replacements(text: str, replacements: Dict[str, str]) -> str:
     return updated
 
 
+def install_spacy_model(model_name: str) -> None:
+    """
+    Install a configured spaCy model into the active Python environment.
+
+    This only installs model assets after spaCy itself is already importable.
+    It intentionally does not install spaCy, because package installation belongs
+    to the selected YATSEE extra such as .[transcript] or .[pipeline].
+
+    :param model_name: Configured spaCy model name
+    :return: None
+    :raises RuntimeError: If model installation fails
+    """
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-m", "spacy", "download", model_name],
+        check=False,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to install spaCy model '{model_name}'")
+
+
 def load_spacy_model(model_name: str) -> Any:
     """
     Load a spaCy model once for the normalization run.
 
+    If spaCy is installed but the configured model is missing, install the
+    configured model into the active Python environment and retry loading it.
+
     :param model_name: spaCy model name
     :return: Loaded spaCy language model
-    :raises RuntimeError: If spaCy or the requested model cannot be loaded
+    :raises RuntimeError: If spaCy is unavailable or the model cannot be loaded
     """
     try:
         import spacy
+    except ModuleNotFoundError as exc:
+        if exc.name == "spacy":
+            raise RuntimeError(
+                "spaCy package is not installed. "
+                "Install YATSEE with .[transcript] or .[pipeline]."
+            ) from exc
+
+        raise RuntimeError(
+            f"spaCy dependency import failed: missing module '{exc.name}'"
+        ) from exc
     except ImportError as exc:
-        raise RuntimeError("spaCy is not installed") from exc
+        raise RuntimeError(f"spaCy import failed: {exc}") from exc
 
     try:
+        return spacy.load(model_name)
+    except OSError:
+        install_spacy_model(model_name)
         return spacy.load(model_name)
     except Exception as exc:
         raise RuntimeError(f"Failed to load spaCy model '{model_name}': {exc}") from exc

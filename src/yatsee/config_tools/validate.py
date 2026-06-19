@@ -55,7 +55,7 @@ def validate_entity_config(global_cfg: Dict[str, Any], entity: str) -> List[str]
         raise ValidationError(f"Missing local entity config: {config_path}")
     messages.append(f"Found local entity config: {config_path}")
 
-    required_registry_keys = {"display_name", "entity", "inputs"}
+    required_registry_keys = {"display_name", "entity"}
     missing_registry = sorted(required_registry_keys - set(entity_registry.keys()))
     if missing_registry:
         raise ValidationError(

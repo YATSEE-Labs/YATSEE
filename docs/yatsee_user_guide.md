@@ -1,15 +1,13 @@
 # YATSEE: User Guide
 
-YATSEE is a local-first audio extraction and processing pipeline designed to turn raw meeting audio into clean, searchable, and auditable artifacts.
+YATSEE is a local-first audio extraction and processing pipeline designed to turn raw meeting media into clean, searchable, and auditable artifacts.
 
 It can:
 
-- fetch public source media
-- normalize audio
+- normalize raw media into transcription-ready audio
 - transcribe speech
 - slice transcript cues into text and optional JSONL segments
 - normalize transcript text
-- generate deterministic Meeting Record Extracts
 - generate LLM-based summaries through configurable providers
 
 The pipeline is intentionally staged. Each stage produces useful artifacts and can be inspected independently.
@@ -19,13 +17,12 @@ The pipeline is intentionally staged. Each stage produces useful artifacts and c
 # Table of Contents
 
 - [Before Stage 1: Create or Select an Entity](#before-stage-1-create-or-select-an-entity)
-- [Stage 1: Audio Intake and Download](#stage-1-audio-intake-and-download)
+- [Stage 1: Raw Media Intake](#stage-1-raw-media-intake)
 - [Stage 2: Audio Formatting and Chunking](#stage-2-audio-formatting-and-chunking)
 - [Stage 3: Transcription](#stage-3-transcription)
 - [Stage 4a: Slicing Transcripts into Segments](#stage-4a-slicing-transcripts-into-segments)
 - [Stage 4b: Transcript Normalization and Structure](#stage-4b-transcript-normalization-and-structure)
-- [Stage 5a: Meeting Record Extracts](#stage-5a-meeting-record-extracts)
-- [Stage 5b: Intelligence, Summarization, and Provider-Based LLM Processing](#stage-5b-intelligence-summarization-and-provider-based-llm-processing)
+- [Stage 5: Intelligence, Summarization, and Provider-Based LLM Processing](#stage-5-intelligence-summarization-and-provider-based-llm-processing)
 - [Typical Full Pipeline](#typical-full-pipeline)
 - [Output Directory Overview](#output-directory-overview)
 - [Troubleshooting Workflow](#troubleshooting-workflow)
@@ -45,7 +42,7 @@ An entity represents a source group such as:
 - a public meeting channel
 - another recurring source body
 
-Before fetching media, make sure the entity exists in the global registry and has a local `config.toml`.
+Before processing media, make sure the entity exists in the global registry and has a local `config.toml`.
 
 ## List existing entities
 
@@ -61,8 +58,7 @@ Example:
 yatsee config entity add \
   --display-name "Example County Board" \
   --entity example_county_board \
-  --base "country.US.state.EX." \
-  --inputs youtube
+  --base "country.US.state.EX."
 ```
 
 This registers the entity globally.
@@ -87,22 +83,20 @@ The scaffold does not overwrite an existing local config.
 nano data/example_county_board/config.toml
 ```
 
-At minimum, set the YouTube source path:
-
-```toml
-[sources.youtube]
-youtube_path = "@replace_with_channel_or_playlist"
-enabled = true
-```
-
-For a county board, also review:
+At minimum, review:
 
 ```toml
 [settings]
 entity_type = "county_board"
 entity_level = "county"
 location = "Example County, Example State"
+
+[media]
+input_dir = "downloads"
+audio_dir = "audio"
 ```
+
+`input_dir` is provider-neutral. External acquisition tools, upload jobs, manual copies, or recording workflows can place compatible files there.
 
 The scaffold may need manual correction for non-city civic bodies.
 
@@ -118,111 +112,73 @@ yatsee config validate --entity example_county_board
 yatsee config resolve --entity example_county_board
 ```
 
-Use this before source fetching. It shows the merged runtime configuration that YATSEE will actually use.
+Use this before long runs. It shows the merged runtime configuration that YATSEE will actually use.
 
 ---
 
-# Stage 1: Audio Intake and Download
+# Stage 1: Raw Media Intake
 
 ## Purpose
 
-Fetch source media for a configured entity and place it into the pipeline as raw input.
+Place compatible raw media into the pipeline so YATSEE can normalize it into transcription-ready audio.
 
-This is typically used for YouTube-backed public meeting acquisition.
+YATSEE core does not need to know where the media came from. It only needs a file or directory containing compatible media.
 
 ## Input
 
-- configured entity source definitions
-- optional explicit source adapter
-- optional output directory override
-- optional date filters
-
-## Output
-
-Downloaded source media under:
+Raw media from:
 
 ```text
 data/<entity>/downloads/
 ```
 
-or a user-specified output directory.
+or a direct input path.
+
+## Output
+
+No derived output is produced at this stage. This is the handoff point before audio formatting.
 
 ## How it works
 
-YATSEE loads the global config, loads the entity config, merges them, resolves enabled source settings, then runs the selected source adapter.
+External acquisition tools, upload jobs, manual copies, or recording workflows place media into the configured input location.
 
-For YouTube, YATSEE uses the configured `youtube_path`.
-
-The stage is intended to be repeatable.
-
-YATSEE uses tracking files such as:
+The default entity-local raw media directory is:
 
 ```text
-.downloaded
-.playlist_ids.json
+data/<entity>/downloads/
 ```
 
-to avoid needless repeated work.
-
-## CLI options
-
-```text
--e / --entity
---source
--c / --config
--o / --output-dir
---date-after
---date-before
---make-playlist
-```
+This default name is retained for compatibility. It should be understood as raw media input, not proof that YATSEE downloaded the file.
 
 ## Usage examples
 
-Build or refresh playlist metadata:
+Copy raw media into the default directory:
 
 ```bash
-yatsee source fetch \
-  -e example_entity \
-  --make-playlist
+mkdir -p data/example_entity/downloads
+cp /path/to/media/* data/example_entity/downloads/
 ```
 
-Fetch media:
+Run the formatter against the default entity directory:
 
 ```bash
-yatsee source fetch \
+yatsee audio format \
   -e example_entity
 ```
 
-Fetch only recent media:
+Override the input directory for one run:
 
 ```bash
-yatsee source fetch \
+yatsee audio format \
   -e example_entity \
-  --date-after 20250101
-```
-
-Fetch from a specific source adapter:
-
-```bash
-yatsee source fetch \
-  -e example_entity \
-  --source youtube
-```
-
-Override output directory:
-
-```bash
-yatsee source fetch \
-  -e example_entity \
-  --output-dir ./downloads
+  --input-dir /path/to/raw/media
 ```
 
 ## Design notes
 
-- Source acquisition is separated from audio formatting.
-- Repeated runs should skip already-known items.
-- Playlist cache generation can be run independently.
-- This is the safest first stage to test when onboarding a new entity.
+- Raw media intake is separated from audio formatting.
+- Provider-specific acquisition belongs outside the core YATSEE pipeline.
+- The core pipeline starts once compatible media files exist.
 
 ---
 
@@ -230,13 +186,13 @@ yatsee source fetch \
 
 ## Purpose
 
-Convert raw source media into transcription-ready audio.
+Convert raw media into transcription-ready audio.
 
 This stage enforces a consistent audio format so transcription behavior is more predictable.
 
 ## Input
 
-Source files from:
+Raw media files from:
 
 ```text
 data/<entity>/downloads/
@@ -289,7 +245,7 @@ Long files can optionally be split into chunks.
 
 ## Usage examples
 
-Format all downloaded media for an entity:
+Format all raw media for an entity:
 
 ```bash
 yatsee audio format \
@@ -333,7 +289,7 @@ yatsee audio format \
 ## Design notes
 
 - Formatting does not interpret content.
-- Formatting preserves the source media and creates derived audio.
+- Formatting preserves raw media and creates derived audio.
 - FLAC usually saves space compared with WAV while preserving transcription quality.
 - Chunking is useful for long recordings or constrained hardware.
 
@@ -548,7 +504,7 @@ yatsee transcript slice \
 
 Clean transcript text into a more usable normalized form.
 
-This stage improves downstream extraction, summarization, and search quality.
+This stage improves downstream summarization and search quality.
 
 ## Input
 
@@ -625,117 +581,14 @@ yatsee transcript normalize \
 
 ## Design notes
 
-- Normalization is still deterministic text processing.
+- Normalization is deterministic text processing.
 - It does not summarize or interpret.
-- Normalized transcript text is usually the best source for deterministic extraction and search indexing.
+- Normalized transcript text is usually the best source for summarization and search indexing.
 - Replacement rules can materially improve output quality.
 
 ---
 
-# Stage 5a: Meeting Record Extracts
-
-## Purpose
-
-Generate rules-based Meeting Record Extracts from normalized transcript text.
-
-This stage does not call an LLM.
-
-It creates deterministic Markdown artifacts that can help reviewers quickly inspect detected meeting structure.
-
-## Input
-
-Normalized TXT files from:
-
-```text
-data/<entity>/normalized/
-```
-
-or a direct input path.
-
-## Output
-
-Markdown extracts under:
-
-```text
-data/<entity>/record_extract/
-```
-
-Example:
-
-```text
-data/example_entity/record_extract/<base>.extract.md
-```
-
-## What it detects
-
-Depending on transcript quality and meeting style, the extract may surface:
-
-- meeting flow
-- agenda items
-- ordinances and resolutions
-- motions
-- seconds
-- vote results
-- roll calls
-- money references
-- organizations and entities
-- people and roles
-- discussion points
-- public comment topics
-- unresolved or verification-needed items
-
-## CLI options
-
-```text
--e / --entity
--c / --config
--i / --input-path
--o / --output-dir
---force
-```
-
-## Usage examples
-
-Generate extracts for an entity:
-
-```bash
-yatsee intel extract \
-  -e example_entity \
-  --force
-```
-
-Run against direct input:
-
-```bash
-yatsee intel extract \
-  --input-path ./normalized \
-  --output-dir ./record_extract \
-  --force
-```
-
-## Design notes
-
-- This stage is deterministic.
-- It is useful before any LLM summary exists.
-- It should be treated as a review aid, not an official record.
-- It may include false positives caused by transcript errors.
-- It may miss items when transcript structure is poor.
-- It can later be used as a summary coverage check.
-
-## Why this stage matters
-
-The Meeting Record Extract creates a stable civic review artifact without relying on generative AI.
-
-That makes it useful for:
-
-- publishing public meeting references
-- checking whether summaries omitted important items
-- building lightweight artifact websites
-- reviewing meetings quickly before deeper analysis
-
----
-
-# Stage 5b: Intelligence, Summarization, and Provider-Based LLM Processing
+# Stage 5: Intelligence, Summarization, and Provider-Based LLM Processing
 
 ## Purpose
 
@@ -868,39 +721,34 @@ yatsee intel run \
 
 - This stage is interpretive.
 - It should generally run after transcription, slicing, and normalization.
-- It is useful after the deterministic artifacts are already working.
-- Deterministic extracts can later help validate whether summaries missed key items.
+- It is useful only after transcript quality is confirmed.
+- Prompt quality and local context matter, but they cannot compensate for poor audio or poor transcripts.
 
 ---
 
 # Typical Full Pipeline
 
-For a new YouTube-backed civic entity:
+For a new civic entity:
 
 ```bash
 yatsee config entity add \
   --display-name "Example County Board" \
   --entity example_county_board \
-  --base "country.US.state.EX." \
-  --inputs youtube
+  --base "country.US.state.EX."
 
 yatsee config init \
   --entity example_county_board
 
 nano data/example_county_board/config.toml
 
+mkdir -p data/example_county_board/downloads
+cp /path/to/raw/media/* data/example_county_board/downloads/
+
 yatsee config validate \
   --entity example_county_board
 
 yatsee config resolve \
   --entity example_county_board
-
-yatsee source fetch \
-  -e example_county_board \
-  --make-playlist
-
-yatsee source fetch \
-  -e example_county_board
 
 yatsee audio format \
   -e example_county_board
@@ -917,14 +765,6 @@ yatsee transcript normalize \
   -e example_county_board \
   --force
 
-yatsee intel extract \
-  -e example_county_board \
-  --force
-```
-
-Optional LLM summary:
-
-```bash
 yatsee intel run \
   -e example_county_board
 ```
@@ -941,7 +781,6 @@ data/example_county_board/
 ├── config.toml
 ├── downloads/
 ├── normalized/
-├── record_extract/
 ├── summary/
 ├── summary_nemo/
 ├── transcripts_medium/
@@ -950,7 +789,7 @@ data/example_county_board/
 
 ## `downloads/`
 
-Raw fetched source media and source tracking files.
+Provider-neutral raw media input.
 
 ## `audio/`
 
@@ -969,10 +808,6 @@ transcripts_medium/
 ## `normalized/`
 
 Cleaned normalized transcript text.
-
-## `record_extract/`
-
-Rules-based Meeting Record Extract Markdown files.
 
 ## `summary/` or `summary_<model>/`
 
@@ -998,8 +833,7 @@ If missing, add it:
 yatsee config entity add \
   --display-name "Example Entity" \
   --entity example_entity \
-  --base "country.US.state.EX." \
-  --inputs youtube
+  --base "country.US.state.EX."
 ```
 
 ## Local config missing
@@ -1008,30 +842,9 @@ yatsee config entity add \
 yatsee config init --entity example_entity
 ```
 
-## Source fetch finds nothing
-
-Check:
-
-```bash
-yatsee config resolve --entity example_entity
-```
-
-Verify:
-
-```text
-sources.youtube.youtube_path
-sources.youtube.enabled
-```
-
-Then rebuild playlist:
-
-```bash
-yatsee source fetch -e example_entity --make-playlist
-```
-
 ## Audio formatting finds nothing
 
-Check downloads:
+Check raw media:
 
 ```bash
 find data/example_entity/downloads -maxdepth 2 -type f
@@ -1041,6 +854,12 @@ Run dry-run:
 
 ```bash
 yatsee audio format -e example_entity --dry-run
+```
+
+Or provide a direct path:
+
+```bash
+yatsee audio format -e example_entity --input-dir /path/to/raw/media --dry-run
 ```
 
 ## Transcription skips files
@@ -1081,25 +900,11 @@ Run:
 yatsee transcript normalize -e example_entity --force
 ```
 
-## Extract stage finds nothing
-
-Check normalized TXT files:
-
-```bash
-find data/example_entity/normalized -name '*.txt'
-```
-
-Run:
-
-```bash
-yatsee intel extract -e example_entity --force
-```
-
 ## Summaries are poor
 
 Check in this order:
 
-1. source audio quality
+1. raw media quality
 2. transcription quality
 3. normalized transcript quality
 4. entity-specific replacements
@@ -1118,16 +923,13 @@ The most useful YATSEE workflow is not “throw audio at an LLM.”
 The durable workflow is:
 
 ```text
-source media
+raw media
 → formatted audio
 → VTT transcript
 → sliced text
 → normalized transcript
-→ deterministic meeting record extract
 → optional LLM summary
 → optional search / publishing
 ```
-
-The deterministic layers create value before any LLM runs.
 
 Use LLM summaries as an enhancement, not as the spine of the system.

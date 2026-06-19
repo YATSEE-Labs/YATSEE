@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=80", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -10,20 +10,25 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "AGPL-3.0-only" }
 authors = [
-    { name = "YATSEE Labs" }
+  { name = "YATSEE Labs" }
 ]
 dependencies = [
   "toml~=0.10.2",
   "tomlkit~=0.11.8",
-  "yt-dlp>=2026.3.17",
-  "yt-dlp-ejs~=0.8.0",
-  "torch<=2.7.1",
-  "torchaudio<=2.7.1",
-  "tqdm<=4.67.1",
-  "openai-whisper==20250625",
 ]
 
 [project.optional-dependencies]
+whisper = [
+  "openai-whisper==20250625",
+
+  # Temporary known-good cap for the current CUDA/PyTorch environment.
+  # Revisit after Fedora/NVIDIA/CUDA cleanup.
+  "torch<=2.7.1",
+  "torchaudio<=2.7.1",
+
+  "tqdm<=4.67.1",
+]
+
 faster = [
   "faster-whisper==1.2.1",
 ]
@@ -31,6 +36,7 @@ faster = [
 transcript = [
   "webvtt-py~=0.5.1",
   "spacy>=3.8.14",
+  "click>=8.4,<9",
   "sentence-transformers~=4.1.0",
 ]
 
@@ -40,31 +46,77 @@ intelligence = [
   "mdformat~=1.0.0",
 ]
 
-llamacpp = [
-  "llama-cpp-python[server]",
+pipeline = [
+  "openai-whisper==20250625",
+
+  # Temporary known-good cap for the current CUDA/PyTorch environment.
+  # Revisit after Fedora/NVIDIA/CUDA cleanup.
+  "torch<=2.7.1",
+  "torchaudio<=2.7.1",
+
+  "tqdm<=4.67.1",
+  "faster-whisper==1.2.1",
+  "webvtt-py~=0.5.1",
+  "spacy>=3.8.14",
+  "click>=8.4,<9",
+  "sentence-transformers~=4.1.0",
+  "PyYAML~=6.0.2",
+  "requests~=2.32.4",
+  "mdformat~=1.0.0",
 ]
 
 index = [
   "chromadb>=1.5.7",
-  "sentence-transformers~=4.1.0",
-  "scikit-learn~=1.8.0",
+  "numpy",
+  "scikit-learn>=1.8,<2",
 ]
 
-ui = [
+search = [
+  "chromadb>=1.5.7",
+  "sentence-transformers~=4.1.0",
   "streamlit>=1.56.0",
 ]
 
+research = [
+  "chromadb>=1.5.7",
+  "numpy",
+  "sentence-transformers~=4.1.0",
+  "scikit-learn>=1.8,<2",
+  "streamlit>=1.56.0",
+]
+
+# Compatibility alias for older docs/scripts that used `.[ui]`.
+ui = [
+  "chromadb>=1.5.7",
+  "sentence-transformers~=4.1.0",
+  "streamlit>=1.56.0",
+]
+
+llamacpp = [
+  "llama-cpp-python[server]",
+]
+
 full = [
+  "openai-whisper==20250625",
+
+  # Temporary known-good cap for the current CUDA/PyTorch environment.
+  # Revisit after Fedora/NVIDIA/CUDA cleanup.
+  "torch<=2.7.1",
+  "torchaudio<=2.7.1",
+
+  "tqdm<=4.67.1",
   "faster-whisper==1.2.1",
   "webvtt-py~=0.5.1",
+  "click>=8.4,<9",
   "spacy>=3.8.14",
   "sentence-transformers~=4.1.0",
   "PyYAML~=6.0.2",
   "requests~=2.32.4",
   "mdformat~=1.0.0",
-  "llama-cpp-python[server]",
+
   "chromadb>=1.5.7",
-  "scikit-learn~=1.8.0",
+  "numpy",
+  "scikit-learn>=1.8,<2",
   "streamlit>=1.56.0",
 ]
 

@@ -7,7 +7,7 @@
 #   - Python version checks
 #   - virtualenv creation
 #   - editable package install from pyproject.toml
-#   - stage-related system tool checks
+#   - core system tool checks
 #   - optional spaCy model install
 #
 # It is not the source of truth for Python dependencies. pyproject.toml is.
@@ -73,8 +73,6 @@ check_repo_files() {
 check_system_tools() {
     print_header "System tool checks"
 
-    local missing=0
-
     if have_cmd ffmpeg; then
         echo "ffmpeg found: $(command -v ffmpeg)"
     else
@@ -82,23 +80,7 @@ check_system_tools() {
         echo "  Needed for audio formatting/transcoding workflows."
         echo "  Linux: install via your package manager"
         echo "  macOS: brew install ffmpeg"
-        missing=1
-    fi
-
-    if have_cmd yt-dlp; then
-        echo "yt-dlp found: $(command -v yt-dlp)"
-    else
-        echo "WARNING: yt-dlp not found."
-        echo "  Needed for source fetching workflows."
-        echo "  Linux: install via your package manager or pipx"
-        echo "  macOS: brew install yt-dlp"
-        missing=1
-    fi
-
-    if [[ "$missing" -eq 0 ]]; then
-        echo "Required external tools for common workflows are present"
-    else
-        echo "One or more optional-but-important system tools are missing"
+        echo "  Continue only if you do not plan to run audio formatting on this host."
     fi
 }
 
@@ -121,30 +103,33 @@ create_and_activate_venv() {
 install_package() {
     print_header "Package install"
 
-    local install_choice install_target pip_spec
+    local install_choice install_target
+    local -a pip_args
 
     echo "Install targets:"
-    echo "  1) base          -> pip install -e ."
-    echo "  2) transcript    -> pip install -e .[transcript]"
-    echo "  3) intelligence  -> pip install -e .[intelligence]"
-    echo "  4) llamacpp      -> pip install -e .[llamacpp]"
-    echo "  5) index         -> pip install -e .[index]"
-    echo "  6) ui            -> pip install -e .[ui]"
-    echo "  7) full          -> pip install -e .[full]"
-    echo "  8) skip install"
+    echo "  1) base       -> pip install -e ."
+    echo "  2) pipeline   -> pip install -e .[pipeline]"
+    echo "  3) index      -> pip install -e .[index]"
+    echo "  4) search     -> pip install -e .[search]"
+    echo "  5) research   -> pip install -e .[research]"
+    echo "  6) ui         -> pip install -e .[ui]"
+    echo "  7) llamacpp   -> pip install -e .[llamacpp]"
+    echo "  8) full       -> pip install -e .[full]"
+    echo "  9) skip install"
 
-    read -r -p "Choose install target [7]: " install_choice
-    install_choice="${install_choice:-7}"
+    read -r -p "Choose install target [8]: " install_choice
+    install_choice="${install_choice:-8}"
 
     case "$install_choice" in
         1) install_target="base" ;;
-        2) install_target="transcript" ;;
-        3) install_target="intelligence" ;;
-        4) install_target="llamacpp" ;;
-        5) install_target="index" ;;
+        2) install_target="pipeline" ;;
+        3) install_target="index" ;;
+        4) install_target="search" ;;
+        5) install_target="research" ;;
         6) install_target="ui" ;;
-        7) install_target="$DEFAULT_INSTALL_TARGET" ;;
-        8)
+        7) install_target="llamacpp" ;;
+        8) install_target="$DEFAULT_INSTALL_TARGET" ;;
+        9)
             echo "Skipping package install"
             return 0
             ;;
@@ -157,13 +142,13 @@ install_package() {
     python -m pip install --upgrade pip
 
     if [[ "$install_target" == "base" ]]; then
-        pip_spec="-e ."
+        pip_args=(-e .)
     else
-        pip_spec="-e .[${install_target}]"
+        pip_args=(-e ".[${install_target}]")
     fi
 
-    echo "Installing with: pip install ${pip_spec}"
-    python -m pip install ${pip_spec}
+    echo "Installing with: pip install ${pip_args[*]}"
+    python -m pip install "${pip_args[@]}"
     echo "Package install complete"
 }
 
@@ -223,6 +208,10 @@ Common commands:
   yatsee config --help
   yatsee config entity list
   yatsee config validate
+  yatsee audio format --help
+  yatsee audio transcribe --help
+  yatsee transcript normalize --help
+  yatsee intel run --help
 
 If you are using editable install mode and the console script is not available yet, use:
 
@@ -231,9 +220,10 @@ If you are using editable install mode and the console script is not available y
 Notes:
   - pyproject.toml is the source of truth for Python dependencies
   - ffmpeg is needed for audio formatting/transcoding
-  - yt-dlp is needed for source fetching
+  - raw media should already exist in data/<entity>/downloads or be passed with --input-dir
+  - acquisition/import tooling is outside the core YATSEE CLI
   - transcript/index workflows may require spaCy models and additional extras
-  - intel workflows now use provider settings such as llm_provider and llm_provider_url in yatsee.toml
+  - intel workflows use provider settings such as llm_provider and llm_provider_url in yatsee.toml
 EOF
 }
 
@@ -245,7 +235,6 @@ show_summary() {
     echo "  Virtualenv      : ${VENV_DIR}"
     echo "  pyproject.toml  : present"
     echo "  ffmpeg          : $(command -v ffmpeg || echo 'missing')"
-    echo "  yt-dlp          : $(command -v yt-dlp || echo 'missing')"
 }
 
 main() {

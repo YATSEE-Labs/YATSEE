@@ -31,5 +31,5 @@ class EntityNotFoundError(ConfigError):
 
 class ValidationError(YatseeError):
     """
-    Raised when configuration validation fails.
+    Raised when runtime inputs, CLI arguments, or configuration values are invalid.
     """

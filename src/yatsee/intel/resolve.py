@@ -52,8 +52,7 @@ def resolve_intel_paths(global_config_path: str, args: Any) -> Dict[str, Any]:
     if not input_dir:
         raise ValidationError("No input transcript path resolved")
 
-    file_list = discover_files(input_dir, (".txt",))
-    file_list = [path for path in file_list if not path.lower().endswith("punct.txt")]
+    file_list = discover_files(input_dir,(".txt",), exclude_suffixes=("punct.txt",))
     if not file_list:
         raise ValidationError(f"No transcript files found in: {input_dir}")
 

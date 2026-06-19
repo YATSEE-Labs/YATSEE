@@ -6,7 +6,7 @@
 #   - Python version checks
 #   - virtualenv creation
 #   - editable package install from pyproject.toml
-#   - system tool checks
+#   - core system tool checks
 #   - optional CUDA detection
 #   - optional spaCy model install
 #
@@ -101,7 +101,6 @@ function Test-SystemTools {
     Write-Section "System tool checks"
 
     Test-SystemTool -ToolName "ffmpeg" -Purpose "audio formatting and transcoding"
-    Test-SystemTool -ToolName "yt-dlp" -Purpose "source fetching workflows"
 }
 
 function New-AndActivateVenv {
@@ -118,7 +117,7 @@ function New-AndActivateVenv {
         Write-Host "Using existing virtual environment at $VenvDir"
     }
 
-    $activateScript = Join-Path $PSScriptRoot "$VenvDir\Scripts\Activate.ps1"
+    $activateScript = Join-Path (Get-Location) "$VenvDir\Scripts\Activate.ps1"
     & $activateScript
     Write-Host "Activated virtual environment"
     Write-Host "Remember to run: .\$VenvDir\Scripts\Activate.ps1"
@@ -128,29 +127,31 @@ function Install-YatseePackage {
     Write-Section "Package install"
 
     Write-Host "Install targets:"
-    Write-Host "  1) base          -> pip install -e ."
-    Write-Host "  2) transcript    -> pip install -e .[transcript]"
-    Write-Host "  3) intelligence  -> pip install -e .[intelligence]"
-    Write-Host "  4) llamacpp      -> pip install -e .[llamacpp]"
-    Write-Host "  5) index         -> pip install -e .[index]"
-    Write-Host "  6) ui            -> pip install -e .[ui]"
-    Write-Host "  7) full          -> pip install -e .[full]"
-    Write-Host "  8) skip install"
+    Write-Host "  1) base       -> pip install -e ."
+    Write-Host "  2) pipeline   -> pip install -e .[pipeline]"
+    Write-Host "  3) index      -> pip install -e .[index]"
+    Write-Host "  4) search     -> pip install -e .[search]"
+    Write-Host "  5) research   -> pip install -e .[research]"
+    Write-Host "  6) ui         -> pip install -e .[ui]"
+    Write-Host "  7) llamacpp   -> pip install -e .[llamacpp]"
+    Write-Host "  8) full       -> pip install -e .[full]"
+    Write-Host "  9) skip install"
 
-    $choice = Read-Host "Choose install target [7]"
+    $choice = Read-Host "Choose install target [8]"
     if ([string]::IsNullOrWhiteSpace($choice)) {
-        $choice = "7"
+        $choice = "8"
     }
 
     switch ($choice) {
-        "1" { $pipSpec = "-e ." }
-        "2" { $pipSpec = "-e .[transcript]" }
-        "3" { $pipSpec = "-e .[intelligence]" }
-        "4" { $pipSpec = "-e .[llamacpp]" }
-        "5" { $pipSpec = "-e .[index]" }
-        "6" { $pipSpec = "-e .[ui]" }
-        "7" { $pipSpec = "-e .[$DefaultInstallTarget]" }
-        "8" {
+        "1" { $pipArgs = @("-e", ".") }
+        "2" { $pipArgs = @("-e", ".[pipeline]") }
+        "3" { $pipArgs = @("-e", ".[index]") }
+        "4" { $pipArgs = @("-e", ".[search]") }
+        "5" { $pipArgs = @("-e", ".[research]") }
+        "6" { $pipArgs = @("-e", ".[ui]") }
+        "7" { $pipArgs = @("-e", ".[llamacpp]") }
+        "8" { $pipArgs = @("-e", ".[$DefaultInstallTarget]") }
+        "9" {
             Write-Host "Skipping package install"
             return
         }
@@ -161,8 +162,8 @@ function Install-YatseePackage {
     }
 
     python -m pip install --upgrade pip
-    Write-Host "Installing with: pip install $pipSpec"
-    python -m pip install $pipSpec
+    Write-Host "Installing with: pip install $($pipArgs -join ' ')"
+    python -m pip install @pipArgs
     Write-Host "Package install complete"
 }
 
@@ -227,10 +228,8 @@ function Show-Summary {
     Write-Host "  pyproject.toml : present"
 
     $ffmpegCmd = Get-Command ffmpeg -ErrorAction SilentlyContinue
-    $ytdlpCmd = Get-Command yt-dlp -ErrorAction SilentlyContinue
 
     Write-Host "  ffmpeg         : $(if ($ffmpegCmd) { $ffmpegCmd.Source } else { 'missing' })"
-    Write-Host "  yt-dlp         : $(if ($ytdlpCmd) { $ytdlpCmd.Source } else { 'missing' })"
 }
 
 function Show-NextSteps {
@@ -242,6 +241,10 @@ function Show-NextSteps {
     Write-Host "  yatsee config --help"
     Write-Host "  yatsee config entity list"
     Write-Host "  yatsee config validate"
+    Write-Host "  yatsee audio format --help"
+    Write-Host "  yatsee audio transcribe --help"
+    Write-Host "  yatsee transcript normalize --help"
+    Write-Host "  yatsee intel run --help"
     Write-Host ""
     Write-Host "If the console script is not available yet, use:"
     Write-Host ""
@@ -250,9 +253,10 @@ function Show-NextSteps {
     Write-Host "Notes:"
     Write-Host "  - pyproject.toml is the source of truth for Python dependencies"
     Write-Host "  - ffmpeg is needed for audio formatting/transcoding"
-    Write-Host "  - yt-dlp is needed for source fetching"
+    Write-Host "  - raw media should already exist in data/<entity>/downloads or be passed with --input-dir"
+    Write-Host "  - acquisition/import tooling is outside the core YATSEE CLI"
     Write-Host "  - transcript/index workflows may require spaCy models and extras"
-    Write-Host "  - intel workflows now use provider settings such as llm_provider and llm_provider_url in yatsee.toml"
+    Write-Host "  - intel workflows use provider settings such as llm_provider and llm_provider_url in yatsee.toml"
 }
 
 Write-Section "Python checks"
