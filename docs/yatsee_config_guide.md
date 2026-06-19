@@ -1,11 +1,11 @@
 # YATSEE: Configuration & Orchestration Guide
 
-YATSEE uses a layered configuration model to control how the system resolves defaults, identifies entities, selects models, chooses providers, applies provider security policy, and processes source material across the CLI.
+YATSEE uses a layered configuration model to control how the system resolves defaults, identifies entities, selects models, chooses providers, applies provider security policy, and processes raw media across the CLI.
 
 Most configuration can stay at sensible defaults. The parts that matter most are the sections that define:
 
 - entities
-- source inputs
+- raw media locations
 - local names and roles
 - divisions
 - provider settings
@@ -13,7 +13,7 @@ Most configuration can stay at sensible defaults. The parts that matter most are
 - security policy
 - recurring transcript cleanup rules
 
-If these fields stay generic, YATSEE stays generic. When you fill them in with real local data, YATSEE has better context for identifying people, places, organizations, recurring topics, and source-specific transcript issues across downstream artifacts.
+If these fields stay generic, YATSEE stays generic. When you fill them in with real local data, YATSEE has better context for identifying people, places, organizations, recurring topics, and transcript issues across downstream artifacts.
 
 ---
 
@@ -24,7 +24,7 @@ If these fields stay generic, YATSEE stays generic. When you fill them in with r
 - [Global System Configuration](#global-system-configuration)
 - [Entity Registry](#entity-registry)
 - [Entity-Local Configuration](#entity-local-configuration)
-- [Sources](#sources)
+- [Media Paths](#media-paths)
 - [Divisions](#divisions)
 - [Titles](#titles)
 - [People](#people)
@@ -48,7 +48,7 @@ YATSEE follows this general pattern:
 1. Load global `yatsee.toml`
 2. Load entity-local `config.toml`
 3. Merge entity-local settings over global defaults
-4. Resolve paths, models, providers, sources, and stage behavior
+4. Resolve paths, models, providers, and stage behavior
 5. Run the selected CLI stage
 
 The two main configuration layers are:
@@ -61,7 +61,8 @@ yatsee.toml
   model settings
 
 data/<entity>/config.toml
-  entity-specific source settings
+  entity-specific processing settings
+  raw media path settings
   local people / titles / divisions
   replacement rules
   notes and local metadata
@@ -75,14 +76,14 @@ YATSEE's primary command families are:
 
 ```bash
 yatsee config ...
-yatsee source fetch ...
 yatsee audio format ...
 yatsee audio transcribe ...
 yatsee transcript slice ...
 yatsee transcript normalize ...
-yatsee intel extract ...
 yatsee intel run ...
 ```
+
+Provider-specific acquisition is outside the YATSEE core CLI. External tools, upload workflows, local recordings, or manual copies can place compatible media in the configured raw media directory before YATSEE begins processing.
 
 ---
 
@@ -109,8 +110,7 @@ Use `config entity add`:
 yatsee config entity add \
   --display-name "Example County Board" \
   --entity example_county_board \
-  --base "country.US.state.EX." \
-  --inputs youtube
+  --base "country.US.state.EX."
 ```
 
 This creates a global registry entry similar to:
@@ -120,7 +120,6 @@ This creates a global registry entry similar to:
 display_name = "Example County Board"
 base = "country.US.state.EX."
 entity = "example_county_board"
-inputs = ["youtube"]
 ```
 
 ## What `base` means
@@ -184,9 +183,9 @@ entity_level = "county"
 location = "Example County, Example State"
 notes = "Example County Board public meeting recordings."
 
-[sources.youtube]
-youtube_path = "@replace_with_channel_or_playlist"
-enabled = true
+[media]
+input_dir = "downloads"
+audio_dir = "audio"
 ```
 
 Then refine these sections as needed:
@@ -230,27 +229,32 @@ Inspect the merged runtime config:
 yatsee config resolve --entity example_county_board
 ```
 
-Use `resolve` before fetching media. It shows the final merged configuration YATSEE will actually use.
+Use `resolve` before running pipeline stages. It shows the final merged configuration YATSEE will actually use.
 
-## Step 6: Start the pipeline
+## Step 6: Add raw media and run the pipeline
 
-Once the entity validates, begin source acquisition:
+Place compatible raw media in:
+
+```text
+data/example_county_board/downloads/
+```
+
+or point the formatter at another directory:
 
 ```bash
-yatsee source fetch \
+yatsee audio format \
   -e example_county_board \
-  --make-playlist
+  --input-dir /path/to/raw/media
 ```
 
 Then continue through the normal pipeline:
 
 ```bash
-yatsee source fetch -e example_county_board
 yatsee audio format -e example_county_board
 yatsee audio transcribe -e example_county_board --faster
 yatsee transcript slice -e example_county_board --force
 yatsee transcript normalize -e example_county_board --force
-yatsee intel extract -e example_county_board --force
+yatsee intel run -e example_county_board
 ```
 
 ---
@@ -285,7 +289,6 @@ root_data_dir = "./data"
 log_level = "INFO"
 log_format = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
-default_js_runtime = "node"
 default_summarization_model = "mistral-nemo:latest"
 default_transcription_model = "medium"
 default_sentence_model = "en_core_web_sm"
@@ -335,22 +338,6 @@ ERROR
 
 Use `DEBUG` only while troubleshooting.
 
-## `default_js_runtime`
-
-JavaScript runtime used during YouTube acquisition workflows.
-
-Typical values:
-
-```toml
-default_js_runtime = "node"
-```
-
-or:
-
-```toml
-default_js_runtime = "deno"
-```
-
 ## Default model settings
 
 These define fallback model choices:
@@ -381,13 +368,11 @@ Example:
 display_name = "Example City Council"
 base = "country.US.state.EX."
 entity = "example_city_council"
-inputs = ["youtube"]
 
 [entities.example_county_board]
 display_name = "Example County Board"
 base = "country.US.state.EX."
 entity = "example_county_board"
-inputs = ["youtube"]
 ```
 
 ## `display_name`
@@ -422,16 +407,6 @@ entity = "example_county_board"
 
 This should match the registry key and local data directory.
 
-## `inputs`
-
-Enabled source adapters.
-
-Example:
-
-```toml
-inputs = ["youtube"]
-```
-
 ---
 
 # Entity-Local Configuration
@@ -460,7 +435,6 @@ entity_type = "county_board"
 entity_level = "county"
 location = "Example County, Example State"
 data_path = "./data/example_county_board"
-js_runtime = "node"
 notes = "Example County Board public meeting recordings."
 ```
 
@@ -528,34 +502,68 @@ embedding_model = "all-MiniLM-L6-v2"
 
 ---
 
-# Sources
+# Media Paths
 
-## `[sources.youtube]`
+YATSEE core does not care which external provider produced the raw media. It only needs to know where compatible files are located.
 
-YouTube-backed entities use:
+## `[media]`
 
-```toml
-[sources.youtube]
-youtube_path = "@replace_with_channel_or_playlist"
-enabled = true
-```
-
-`youtube_path` can point to a channel, stream listing, playlist, or supported YouTube path.
-
-Examples:
+Example:
 
 ```toml
-youtube_path = "@replace_with_channel_or_playlist"
+[media]
+input_dir = "downloads"
+audio_dir = "audio"
 ```
+
+## `input_dir`
+
+Provider-neutral raw media input directory.
+
+Relative paths are resolved below the entity `data_path`.
+
+Example:
 
 ```toml
-youtube_path = "https://www.youtube.com/playlist?list=REPLACE_ME"
+input_dir = "downloads"
 ```
 
-Source fetching uses this config when running:
+means:
+
+```text
+data/<entity>/downloads/
+```
+
+An absolute path can be used when raw media is stored elsewhere:
+
+```toml
+input_dir = "/mnt/media/example_county_board"
+```
+
+The CLI can override this per run:
 
 ```bash
-yatsee source fetch -e <entity>
+yatsee audio format \
+  -e example_county_board \
+  --input-dir /path/to/raw/media
+```
+
+## `audio_dir`
+
+Normalized audio output directory.
+
+Relative paths are resolved below the entity `data_path`.
+
+Example:
+
+```toml
+audio_dir = "audio"
+```
+
+means:
+
+```text
+data/<entity>/audio/
 ```
 
 ---
@@ -669,7 +677,7 @@ This checks global config and the selected entity config.
 yatsee config resolve --entity example_county_board
 ```
 
-Use this when troubleshooting path, model, source, or provider behavior.
+Use this when troubleshooting path, model, or provider behavior.
 
 ## List registered entities
 
@@ -863,8 +871,6 @@ yatsee intel run \
 
 Prompt routing controls which prompt templates are used for different meeting types.
 
-For deterministic Meeting Record Extracts, prompt profiles are not used because `intel extract` is rules-based and does not call an LLM.
-
 ---
 
 # Entity Configuration: What Usually Needs Editing
@@ -875,7 +881,7 @@ For a new civic entity, these sections usually need attention:
 
 ```text
 [settings]
-[sources.youtube]
+[media]
 ```
 
 ## High-value refinements
@@ -899,14 +905,13 @@ pricing settings
 
 1. Add entity
 2. Init local config
-3. Set `youtube_path`
+3. Place raw media in the configured media input directory
 4. Correct `entity_type`, `entity_level`, and `location`
 5. Validate
-6. Fetch playlist
-7. Run a limited data batch
-8. Review transcripts and extracts
-9. Add replacements and local names
-10. Rerun normalization and extract stages
+6. Run a limited data batch
+7. Review transcripts and summaries
+8. Add replacements and local names
+9. Rerun normalization and summary stages
 
 ---
 
@@ -914,14 +919,13 @@ pricing settings
 
 - Keep entity handles stable.
 - Use lowercase handles with underscores.
-- Keep source configs minimal and explicit.
+- Keep media paths minimal and explicit.
 - Start with empty people/division lists if you do not know them yet.
 - Add replacements only for recurring mistakes.
-- Validate before fetch.
+- Validate before long runs.
 - Use `config resolve` when behavior does not match expectations.
 - Treat entity config as part of output quality.
 - Do not tune prompts or LLMs before confirming transcript quality.
-- Deterministic artifacts should be useful before summaries are generated.
 
 ---
 
@@ -933,8 +937,7 @@ pricing settings
 yatsee config entity add \
   --display-name "Example County Board" \
   --entity example_county_board \
-  --base "country.US.state.EX." \
-  --inputs youtube
+  --base "country.US.state.EX."
 ```
 
 ## Scaffold local config
@@ -959,9 +962,9 @@ location = "Example County, Example State"
 data_path = "./data/example_county_board"
 notes = "Example County Board public meeting recordings."
 
-[sources.youtube]
-youtube_path = "@replace_with_channel_or_playlist"
-enabled = true
+[media]
+input_dir = "downloads"
+audio_dir = "audio"
 
 [divisions]
 type = "districts"
@@ -984,6 +987,16 @@ third_parties = ["Consultant", "Engineer", "Auditor", "Applicant"]
 "Common Bad Transcription" = "Correct Local Term"
 ```
 
+## Add raw media
+
+Place compatible media in:
+
+```text
+data/example_county_board/downloads/
+```
+
+or use `--input-dir` when formatting.
+
 ## Validate
 
 ```bash
@@ -991,16 +1004,14 @@ yatsee config validate --entity example_county_board
 yatsee config resolve --entity example_county_board
 ```
 
-## Fetch and process
+## Process
 
 ```bash
-yatsee source fetch -e example_county_board --make-playlist
-yatsee source fetch -e example_county_board
 yatsee audio format -e example_county_board
 yatsee audio transcribe -e example_county_board --faster
 yatsee transcript slice -e example_county_board --force
 yatsee transcript normalize -e example_county_board --force
-yatsee intel extract -e example_county_board --force
+yatsee intel run -e example_county_board
 ```
 
 ## Inspect outputs
@@ -1008,13 +1019,13 @@ yatsee intel extract -e example_county_board --force
 ```bash
 find data/example_county_board/transcripts_medium -name '*.vtt' | wc -l
 find data/example_county_board/normalized -name '*.txt' | wc -l
-find data/example_county_board/record_extract -name '*.extract.md' | wc -l
+find data/example_county_board/summary -name '*.md' | wc -l
 ```
 
-Spot-check one extract:
+Spot-check one normalized transcript:
 
 ```bash
-sed -n '1,220p' data/example_county_board/record_extract/<file>.extract.md
+sed -n '1,220p' data/example_county_board/normalized/<file>.txt
 ```
 
 ---
@@ -1026,24 +1037,23 @@ Most users do not need to tune every field.
 The highest-value work is:
 
 - define the entity clearly
-- point it at the right source
-- validate before fetch
+- place raw media in the configured input directory
+- validate before long runs
 - keep local provider security defaults intact
 - add real local names and roles over time
 - add replacements for recurring transcript errors
-- generate deterministic artifacts before relying on summaries
+- confirm transcript quality before relying on summaries
 
 YATSEE works best when the boring layers are solid:
 
 ```text
-source media
+raw media
 audio
 VTT
 plain text
 normalized text
-meeting record extract
 summary
 search / retrieval / publishing
 ```
 
-LLM summaries are optional enhancement layers. The public record artifacts should still be useful without them.
+LLM summaries are optional enhancement layers. The transcript and normalized text artifacts should still be useful without them.

@@ -41,15 +41,18 @@ def ensure_directory(path: str) -> Tuple[bool, str]:
     return True, f"Created directory: {path}"
 
 
-def build_entity_skeleton(entity: str, inputs: List[str], system_cfg: Dict[str, Any]) -> tomlkit.TOMLDocument:
+def build_entity_skeleton(entity: str, system_cfg: Dict[str, Any]) -> tomlkit.TOMLDocument:
     """
     Build a comment-rich entity config.toml skeleton using TOMLKit.
 
     Civic entities receive divisions/titles/people/replacements scaffolds.
     Non-civic media entities receive participant/alias scaffolds.
 
+    The scaffold is intentionally provider-neutral. Core YATSEE processes
+    existing media artifacts and does not need to know whether those artifacts
+    came from YouTube, a file upload, a recorder, or another acquisition tool.
+
     :param entity: Entity handle
-    :param inputs: Declared inputs such as ['youtube']
     :param system_cfg: Global system config dictionary
     :return: TOML document ready to write to disk
     """
@@ -68,14 +71,15 @@ def build_entity_skeleton(entity: str, inputs: List[str], system_cfg: Dict[str, 
     settings_tbl.add("notes", "")
     doc.add("settings", settings_tbl)
 
-    normalized_inputs = [item.lower() for item in inputs]
-    if "youtube" in normalized_inputs:
-        sources_tbl = table()
-        youtube_tbl = table()
-        youtube_tbl.add("youtube_path", "")
-        youtube_tbl.add("enabled", True)
-        sources_tbl.add("youtube", youtube_tbl)
-        doc.add("sources", sources_tbl)
+    doc.add(nl())
+    doc.add(comment("Raw media input is provider-neutral."))
+    doc.add(comment("External acquisition tools should place media in input_dir or use the CLI --input-dir override."))
+    doc.add(comment("Relative media paths are resolved below the entity data_path."))
+
+    # media_tbl = table()
+    # media_tbl.add("input_dir", "downloads")
+    # media_tbl.add("audio_dir", "audio")
+    # doc.add("media", media_tbl)
 
     if "city_council" in entity.lower() or "county_board" in entity.lower():
         settings_tbl["entity_type"] = "city_council"
@@ -134,7 +138,6 @@ def create_entity_config(global_cfg: Dict[str, Any], entity: str) -> str:
     if entity not in entities:
         raise EntityNotFoundError(f"Entity '{entity}' not defined in global config")
 
-    entity_cfg = entities[entity]
     entity_dir = get_entity_dir(global_cfg, entity)
     ensure_directory(entity_dir)
 
@@ -145,7 +148,6 @@ def create_entity_config(global_cfg: Dict[str, Any], entity: str) -> str:
     system_cfg = global_cfg.get("system", {})
     doc = build_entity_skeleton(
         entity=entity,
-        inputs=entity_cfg.get("inputs", []),
         system_cfg=system_cfg,
     )
 

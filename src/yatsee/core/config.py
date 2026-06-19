@@ -14,9 +14,8 @@ from typing import Any, Dict, List, Optional
 
 import toml
 import tomlkit
-from tomlkit.items import Table
 
-from yatsee.core.errors import ConfigNotFoundError, ConfigError, EntityNotFoundError
+from yatsee.core.errors import ConfigError, ConfigNotFoundError, EntityNotFoundError
 from yatsee.core.paths import get_entity_config_path, get_root_data_dir
 
 GLOBAL_CONFIG_PATH = "yatsee.toml"
@@ -111,7 +110,6 @@ def upsert_entity_registry_entry(
     display_name: str,
     entity: str,
     base: str = "",
-    inputs: Optional[List[str]] = None,
 ) -> None:
     """
     Insert or replace a single entity entry inside the existing global config document.
@@ -119,11 +117,13 @@ def upsert_entity_registry_entry(
     This edits only the [entities.<handle>] subtree and preserves the rest of the
     human-authored TOML file structure as much as TOMLKit allows.
 
+    Entity registry records are provider-neutral. Acquisition-provider metadata
+    should live outside the core registry contract.
+
     :param config_path: Path to yatsee.toml
     :param display_name: Human-friendly display name
     :param entity: Entity handle
     :param base: Optional base namespace
-    :param inputs: Optional list of declared inputs
     :raises ConfigError: If the document cannot be updated
     """
     doc = load_global_config_document(config_path)
@@ -136,7 +136,6 @@ def upsert_entity_registry_entry(
     entity_table["display_name"] = display_name
     entity_table["base"] = base
     entity_table["entity"] = entity
-    entity_table["inputs"] = inputs or []
 
     entities_table[entity] = entity_table
     save_global_config_document(doc, config_path)

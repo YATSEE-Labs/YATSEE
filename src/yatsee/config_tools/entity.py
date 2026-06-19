@@ -148,7 +148,6 @@ def add_entity(
     display_name: str,
     entity: str,
     base: str = "",
-    inputs: List[str] | None = None,
     create_dir: bool = True,
 ) -> Dict[str, str]:
     """
@@ -158,15 +157,17 @@ def add_entity(
     TOMLKit. That preserves the rest of the file layout far better than dumping the
     entire config from a plain Python dictionary.
 
+    Entity registry records are provider-neutral. Source acquisition metadata
+    belongs outside the core YATSEE registry contract.
+
     :param global_cfg: Global configuration dictionary
     :param config_path: Path to yatsee.toml
     :param display_name: Human-friendly display name
     :param entity: Entity handle
     :param base: Optional namespace/base value
-    :param inputs: Optional list of declared inputs
     :param create_dir: Create top-level entity directory if True
     :return: Summary of actions performed
-    :raises ValidationError: If inputs are invalid or entity already exists
+    :raises ValidationError: If the entity handle is invalid or already exists
     """
     entity = validate_entity_handle(entity)
     display_name = display_name.strip()
@@ -178,7 +179,6 @@ def add_entity(
     if entity in entities:
         raise ValidationError(f"Entity '{entity}' already exists.")
 
-    normalized_inputs = [item.strip().lower() for item in (inputs or []) if item.strip()]
     base = base.strip().rstrip(".")
 
     upsert_entity_registry_entry(
@@ -186,14 +186,12 @@ def add_entity(
         display_name=display_name,
         entity=entity,
         base=base,
-        inputs=normalized_inputs,
     )
 
     entities[entity] = {
         "display_name": display_name,
         "base": base,
         "entity": entity,
-        "inputs": normalized_inputs,
     }
 
     entity_dir = ""

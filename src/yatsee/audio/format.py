@@ -15,9 +15,10 @@ from yatsee.core.config import load_global_config, load_entity_config
 from yatsee.core.discovery import discover_files
 from yatsee.core.errors import ValidationError
 from yatsee.core.hashing import compute_sha256
+from yatsee.core.paths import get_entity_dir
 from yatsee.core.tracking import append_tracker_value, load_tracker_set
 
-SUPPORTED_INPUT_EXTENSIONS = (".m4a", ".mp4", ".webm")
+SUPPORTED_INPUT_EXTENSIONS = (".m4a", ".mp4", ".webm", ".mp3", ".wav", ".flac", ".mov", ".mkv")
 
 
 def resolve_format_paths(
@@ -47,8 +48,43 @@ def resolve_format_paths(
                 "Without --entity, both --input-dir and --output-dir must be defined"
             )
 
-    downloads_path = input_dir or os.path.join(entity_cfg.get("data_path"), "downloads")
-    audio_out = output_dir or os.path.join(entity_cfg.get("data_path"), "audio")
+    if entity:
+        data_path = entity_cfg.get("data_path") or get_entity_dir(global_cfg, entity)
+        data_path = os.path.abspath(data_path)
+
+        global_media_cfg = global_cfg.get("media", {})
+        entity_media_cfg = entity_cfg.get("media", {})
+
+        if not isinstance(global_media_cfg, dict):
+            global_media_cfg = {}
+
+        if not isinstance(entity_media_cfg, dict):
+            entity_media_cfg = {}
+
+        media_cfg = {
+            **global_media_cfg,
+            **entity_media_cfg,
+        }
+
+        resolved_paths = {}
+
+        for name, override, configured in (
+                ("downloads_path", input_dir, media_cfg.get("input_dir") or "downloads"),
+                ("audio_out", output_dir, media_cfg.get("audio_dir") or "audio"),
+        ):
+            if override:
+                resolved_paths[name] = override
+            elif os.path.isabs(configured):
+                resolved_paths[name] = configured
+            else:
+                resolved_paths[name] = os.path.abspath(os.path.join(data_path, configured))
+
+        downloads_path = resolved_paths["downloads_path"]
+        audio_out = resolved_paths["audio_out"]
+
+    else:
+        downloads_path = input_dir
+        audio_out = output_dir
 
     return {
         "global_cfg": global_cfg,
@@ -94,18 +130,33 @@ def run_format_stage(
     audio_out = resolved["audio_out"]
     chunk_root_dir = resolved["chunk_root_dir"]
 
-    input_files = discover_files(downloads_path, SUPPORTED_INPUT_EXTENSIONS)
+    try:
+        input_files = discover_files(downloads_path, SUPPORTED_INPUT_EXTENSIONS)
+    except FileNotFoundError as exc:
+        if input_dir:
+            raise ValidationError(
+                "No input files found. The path provided with -i/--input-dir does not exist: "
+                f"{downloads_path}"
+            ) from exc
+
+        raise ValidationError(
+            "No input files found in the default media input directory: "
+            f"{downloads_path}\n"
+            "Place input files there, or use -i/--input-dir to point at another source."
+        ) from exc
 
     if not input_files:
-        return {
-            "input_dir": downloads_path,
-            "output_dir": audio_out,
-            "discovered": 0,
-            "processed": 0,
-            "skipped": 0,
-            "chunked": 0,
-            "messages": [f"No input files found at {downloads_path}"],
-        }
+        if input_dir:
+            raise ValidationError(
+                "No supported input files found in the path provided with -i/--input-dir: "
+                f"{downloads_path}"
+            )
+
+        raise ValidationError(
+            "No supported input files found in the default media input directory: "
+            f"{downloads_path}\n"
+            "Place input files there, or use -i/--input-dir to point at another source."
+        )
 
     messages: List[str] = []
 

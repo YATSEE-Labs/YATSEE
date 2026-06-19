@@ -3,7 +3,6 @@ Primary CLI entrypoint for YATSEE.
 
 This CLI surface supports:
 - configuration management commands
-- source fetch orchestration
 - audio format stage
 - audio transcription stage
 - transcript slice stage
@@ -16,7 +15,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from typing import List
 
 from yatsee.audio.format import run_format_stage
 from yatsee.audio.transcribe import run_transcribe_stage
@@ -32,21 +30,8 @@ from yatsee.config_tools.validate import validate_entity_config, validate_global
 from yatsee.core.config import GLOBAL_CONFIG_PATH, load_global_config
 from yatsee.core.errors import YatseeError
 from yatsee.intel.runner import run_intelligence_stage
-from yatsee.source.fetch import run_source_fetch_for_entity
 from yatsee.transcript.normalize import run_normalize_stage
 from yatsee.transcript.slice import run_slice_stage
-
-
-def _parse_inputs(raw: str | None) -> List[str]:
-    """
-    Parse a comma-separated input list from the CLI.
-
-    :param raw: Raw comma-separated string or None
-    :return: Normalized list of lowercase input names
-    """
-    if not raw:
-        return []
-    return [item.strip().lower() for item in raw.split(",") if item.strip()]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -84,45 +69,43 @@ def build_parser() -> argparse.ArgumentParser:
     entity_add_parser.add_argument("--display-name", required=True, help="Human-friendly entity name")
     entity_add_parser.add_argument("--entity", required=True, help="Entity handle")
     entity_add_parser.add_argument("--base", default="", help="Optional namespace/base value")
-    entity_add_parser.add_argument("--inputs", default="", help="Comma-separated input types, e.g. youtube")
-    entity_add_parser.add_argument("--no-create-dir", action="store_true", help="Do not create the top-level entity directory")
+    entity_add_parser.add_argument(
+        "--no-create-dir",
+        action="store_true",
+        help="Do not create the top-level entity directory",
+    )
     entity_add_parser.set_defaults(handler=handle_config_entity_add)
 
-    entity_remove_parser = entity_subparsers.add_parser("remove", help="Remove an entity from the global registry only")
-    entity_remove_parser.add_argument("--entity", required=True, help="Entity handle")
+    entity_remove_parser = entity_subparsers.add_parser(
+        "remove",
+        help="Remove an entity from the global registry only",
+    )
+    entity_remove_parser.add_argument("-e", "--entity", required=True, help="Entity handle")
     entity_remove_parser.set_defaults(handler=handle_config_entity_remove)
 
-    entity_purge_parser = entity_subparsers.add_parser("purge", help="Purge an entity from both the registry and the local filesystem")
-    entity_purge_parser.add_argument("--entity", required=True, help="Entity handle")
-    entity_purge_parser.add_argument("--dry-run", action="store_true", help="Preview what would be removed without making changes")
+    entity_purge_parser = entity_subparsers.add_parser(
+        "purge",
+        help="Purge an entity from both the registry and the local filesystem",
+    )
+    entity_purge_parser.add_argument("-e", "--entity", required=True, help="Entity handle")
+    entity_purge_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview what would be removed without making changes",
+    )
     entity_purge_parser.set_defaults(handler=handle_config_entity_purge)
 
     init_parser = config_subparsers.add_parser("init", help="Create local entity config scaffolds")
-    init_parser.add_argument("--entity", help="Initialize only one entity")
+    init_parser.add_argument("-e", "--entity", help="Initialize only one entity")
     init_parser.set_defaults(handler=handle_config_init)
 
     validate_parser = config_subparsers.add_parser("validate", help="Validate global and entity config")
-    validate_parser.add_argument("--entity", help="Validate a specific entity as well")
+    validate_parser.add_argument("-e", "--entity", help="Validate a specific entity as well")
     validate_parser.set_defaults(handler=handle_config_validate)
 
     resolve_parser = config_subparsers.add_parser("resolve", help="Print resolved runtime config")
-    resolve_parser.add_argument("--entity", help="Resolve a specific entity")
+    resolve_parser.add_argument("-e", "--entity", help="Resolve a specific entity")
     resolve_parser.set_defaults(handler=handle_config_resolve)
-
-    # ----------------------------
-    # source
-    # ----------------------------
-    source_parser = subparsers.add_parser("source", help="Source acquisition commands")
-    source_subparsers = source_parser.add_subparsers(dest="source_command")
-
-    fetch_parser = source_subparsers.add_parser("fetch", help="Fetch source artifacts for an entity")
-    fetch_parser.add_argument("-e", "--entity", required=True, help="Entity handle")
-    fetch_parser.add_argument("--source", help="Optional specific source adapter, e.g. youtube")
-    fetch_parser.add_argument("-o", "--output-dir", help="Optional download/output directory override")
-    fetch_parser.add_argument("--date-after", help="Only include items after YYYYMMDD")
-    fetch_parser.add_argument("--date-before", help="Only include items before YYYYMMDD")
-    fetch_parser.add_argument("--make-playlist", action="store_true", help="Rebuild playlist cache and exit")
-    fetch_parser.set_defaults(handler=handle_source_fetch)
 
     # ----------------------------
     # audio
@@ -150,7 +133,13 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_parser.add_argument("-m", "--model", help="Whisper model size override")
     transcribe_parser.add_argument("--faster", action="store_true", help="Use faster-whisper if installed")
     transcribe_parser.add_argument("-l", "--lang", default="en", help="Language code or 'auto'")
-    transcribe_parser.add_argument("-d", "--device", choices=["auto", "cuda", "cpu", "mps"], default="auto", help="Device for model execution")
+    transcribe_parser.add_argument(
+        "-d",
+        "--device",
+        choices=["auto", "cuda", "cpu", "mps"],
+        default="auto",
+        help="Device for model execution",
+    )
     transcribe_parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     transcribe_parser.add_argument("-q", "--quiet", action="store_true", help="Suppress verbose output")
     transcribe_parser.set_defaults(handler=handle_audio_transcribe)
@@ -169,7 +158,13 @@ def build_parser() -> argparse.ArgumentParser:
     slice_parser.add_argument("-g", "--gen-embed", action="store_true", help="Generate JSONL with embeddings")
     slice_parser.add_argument("--max-window", type=float, default=90.0, help="Hard upper limit on segment length")
     slice_parser.add_argument("--force", action="store_true", help="Overwrite existing outputs")
-    slice_parser.add_argument("-d", "--device", choices=["auto", "cuda", "cpu", "mps"], default="auto", help="Device for embedding execution")
+    slice_parser.add_argument(
+        "-d",
+        "--device",
+        choices=["auto", "cuda", "cpu", "mps"],
+        default="auto",
+        help="Device for embedding execution",
+    )
     slice_parser.set_defaults(handler=handle_transcript_slice)
 
     normalize_parser = transcript_subparsers.add_parser("normalize", help="Normalize transcript text")
@@ -194,32 +189,72 @@ def build_parser() -> argparse.ArgumentParser:
     intel_run_parser.add_argument("-i", "--txt-input", help="Path to a transcript file or directory (.txt)")
     intel_run_parser.add_argument("-o", "--output-dir", help="Directory to save final summaries")
     intel_run_parser.add_argument("-m", "--model", help="LLM model override")
-    intel_run_parser.add_argument("--llm-provider", help="LLM provider override (e.g. ollama, llamacpp, openai, anthropic, codex_cli)")
+    intel_run_parser.add_argument(
+        "--llm-provider",
+        help="LLM provider override (e.g. ollama, llamacpp, openai, anthropic, codex_cli)",
+    )
     intel_run_parser.add_argument("--llm-provider-url", help="LLM provider URL or executable target override")
     intel_run_parser.add_argument("--llm-api-key", help="LLM API key override")
     intel_run_parser.add_argument("--show-pricing", action="store_true", help="Estimate reference pricing for the run")
-    intel_run_parser.add_argument("--no-show-pricing", action="store_true", help="Disable reference pricing even if enabled in config")
+    intel_run_parser.add_argument(
+        "--no-show-pricing",
+        action="store_true",
+        help="Disable reference pricing even if enabled in config",
+    )
     intel_run_parser.add_argument("--pricing-provider", help="Reference provider for pricing (e.g. openai, anthropic)")
     intel_run_parser.add_argument("--pricing-model", help="Reference model for pricing (e.g. gpt-5.4, claude-sonnet-4)")
-    intel_run_parser.add_argument("-f", "--output-format", choices=["markdown", "yaml"], default="markdown", help="Summary output format")
-    intel_run_parser.add_argument("-j", "--job-profile", choices=["civic", "research"], default="civic", help="Prompt workflow family")
-    intel_run_parser.add_argument("-s", "--chunk-style", choices=["word", "sentence", "density"], default="word", help="Chunk boundary method")
+    intel_run_parser.add_argument(
+        "-f",
+        "--output-format",
+        choices=["markdown", "yaml"],
+        default="markdown",
+        help="Summary output format",
+    )
+    intel_run_parser.add_argument(
+        "-j",
+        "--job-profile",
+        choices=["civic", "research"],
+        default="civic",
+        help="Prompt workflow family",
+    )
+    intel_run_parser.add_argument(
+        "-s",
+        "--chunk-style",
+        choices=["word", "sentence", "density"],
+        default="word",
+        help="Chunk boundary method",
+    )
     intel_run_parser.add_argument("-w", "--max-words", type=int, help="Approximate word count threshold for chunking")
     intel_run_parser.add_argument("-t", "--max-tokens", type=int, help="Approximate max tokens per chunk")
     intel_run_parser.add_argument("-p", "--max-pass", type=int, default=3, help="Maximum summarization passes")
-    intel_run_parser.add_argument("-d", "--disable-auto-classification", action="store_true", help="Disable automatic meeting classification")
+    intel_run_parser.add_argument(
+        "-d",
+        "--disable-auto-classification",
+        action="store_true",
+        help="Disable automatic meeting classification",
+    )
     intel_run_parser.add_argument("--first-prompt", help="Prompt ID for first pass")
     intel_run_parser.add_argument("--second-prompt", help="Prompt ID for multi-pass chunk summaries")
     intel_run_parser.add_argument("--final-prompt", help="Prompt ID for final summary pass")
     intel_run_parser.add_argument("--context", default="", help="Optional human-readable meeting context")
     intel_run_parser.add_argument("--print-prompts", action="store_true", help="Print prompt templates and exit")
-    intel_run_parser.add_argument("--enable-chunk-writer", action="store_true", help="Write intermediate chunk summaries for debugging")
+    intel_run_parser.add_argument(
+        "--enable-chunk-writer",
+        action="store_true",
+        help="Write intermediate chunk summaries for debugging",
+    )
     intel_run_parser.set_defaults(handler=handle_intel_run)
 
     return parser
 
 
 def handle_config_entity_list(args: argparse.Namespace) -> int:
+    """
+    List registered entities from the global configuration.
+
+    :param args: Parsed CLI arguments
+    :return: Process exit code
+    """
     global_cfg = load_global_config(args.config)
     entities = list_registered_entities(global_cfg)
 
@@ -234,6 +269,12 @@ def handle_config_entity_list(args: argparse.Namespace) -> int:
 
 
 def handle_config_entity_add(args: argparse.Namespace) -> int:
+    """
+    Add an entity to the global registry.
+
+    :param args: Parsed CLI arguments
+    :return: Process exit code
+    """
     global_cfg = load_global_config(args.config)
     result = add_entity(
         global_cfg=global_cfg,
@@ -241,7 +282,6 @@ def handle_config_entity_add(args: argparse.Namespace) -> int:
         display_name=args.display_name,
         entity=args.entity,
         base=args.base,
-        inputs=_parse_inputs(args.inputs),
         create_dir=not args.no_create_dir,
     )
     print(result["message"])
@@ -251,6 +291,12 @@ def handle_config_entity_add(args: argparse.Namespace) -> int:
 
 
 def handle_config_entity_remove(args: argparse.Namespace) -> int:
+    """
+    Remove an entity from the global registry.
+
+    :param args: Parsed CLI arguments
+    :return: Process exit code
+    """
     global_cfg = load_global_config(args.config)
     result = remove_entity(global_cfg=global_cfg, config_path=args.config, entity=args.entity)
     print(result["message"])
@@ -258,6 +304,12 @@ def handle_config_entity_remove(args: argparse.Namespace) -> int:
 
 
 def handle_config_entity_purge(args: argparse.Namespace) -> int:
+    """
+    Purge an entity from the registry and local filesystem.
+
+    :param args: Parsed CLI arguments
+    :return: Process exit code
+    """
     global_cfg = load_global_config(args.config)
     result = purge_entity(
         global_cfg=global_cfg,
@@ -278,6 +330,12 @@ def handle_config_entity_purge(args: argparse.Namespace) -> int:
 
 
 def handle_config_init(args: argparse.Namespace) -> int:
+    """
+    Create local entity config scaffolds.
+
+    :param args: Parsed CLI arguments
+    :return: Process exit code
+    """
     global_cfg = load_global_config(args.config)
     messages = build_entity_structure(global_cfg=global_cfg, entity=args.entity)
     for message in messages:
@@ -286,6 +344,12 @@ def handle_config_init(args: argparse.Namespace) -> int:
 
 
 def handle_config_validate(args: argparse.Namespace) -> int:
+    """
+    Validate global and optional entity configuration.
+
+    :param args: Parsed CLI arguments
+    :return: Process exit code
+    """
     global_cfg = load_global_config(args.config)
 
     for message in validate_global_config(global_cfg):
@@ -300,39 +364,24 @@ def handle_config_validate(args: argparse.Namespace) -> int:
 
 
 def handle_config_resolve(args: argparse.Namespace) -> int:
+    """
+    Print resolved runtime configuration.
+
+    :param args: Parsed CLI arguments
+    :return: Process exit code
+    """
     resolved = resolve_config(global_config_path=args.config, entity=args.entity)
     print(json.dumps(resolved, indent=2, sort_keys=True))
     return 0
 
 
-def handle_source_fetch(args: argparse.Namespace) -> int:
-    result = run_source_fetch_for_entity(
-        global_config_path=args.config,
-        entity=args.entity,
-        source_name=args.source,
-        output_dir=args.output_dir,
-        date_after=args.date_after,
-        date_before=args.date_before,
-        make_playlist=args.make_playlist,
-    )
-
-    print(f"Entity: {result['entity']}")
-    print(f"Sources run: {', '.join(result['sources_run'])}")
-
-    for adapter_result in result["results"]:
-        print(f"- Source type: {adapter_result['source_type']}")
-        print(f"  Output directory: {adapter_result['downloads_dir']}")
-        print(f"  Discovered: {adapter_result['discovered']}")
-        print(f"  Downloaded: {adapter_result['downloaded']}")
-        print(f"  Skipped: {adapter_result['skipped']}")
-
-    for message in result["messages"]:
-        print(f"- {message}")
-
-    return 0
-
-
 def handle_audio_format(args: argparse.Namespace) -> int:
+    """
+    Run the audio formatting stage.
+
+    :param args: Parsed CLI arguments
+    :return: Process exit code
+    """
     result = run_format_stage(
         global_config_path=args.config,
         entity=args.entity,
@@ -360,6 +409,12 @@ def handle_audio_format(args: argparse.Namespace) -> int:
 
 
 def handle_audio_transcribe(args: argparse.Namespace) -> int:
+    """
+    Run the audio transcription stage.
+
+    :param args: Parsed CLI arguments
+    :return: Process exit code
+    """
     result = run_transcribe_stage(
         global_config_path=args.config,
         entity=args.entity,
@@ -390,6 +445,12 @@ def handle_audio_transcribe(args: argparse.Namespace) -> int:
 
 
 def handle_transcript_slice(args: argparse.Namespace) -> int:
+    """
+    Run the transcript slicing stage.
+
+    :param args: Parsed CLI arguments
+    :return: Process exit code
+    """
     result = run_slice_stage(
         global_config_path=args.config,
         entity=args.entity,
@@ -417,6 +478,12 @@ def handle_transcript_slice(args: argparse.Namespace) -> int:
 
 
 def handle_transcript_normalize(args: argparse.Namespace) -> int:
+    """
+    Run the transcript normalization stage.
+
+    :param args: Parsed CLI arguments
+    :return: Process exit code
+    """
     result = run_normalize_stage(
         global_config_path=args.config,
         entity=args.entity,
@@ -443,6 +510,12 @@ def handle_transcript_normalize(args: argparse.Namespace) -> int:
 
 
 def handle_intel_run(args: argparse.Namespace) -> int:
+    """
+    Run the intelligence summarization stage.
+
+    :param args: Parsed CLI arguments
+    :return: Process exit code
+    """
     result = run_intelligence_stage(args)
 
     if result.get("mode") == "print_prompts":
@@ -498,6 +571,11 @@ def handle_intel_run(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    """
+    Parse CLI arguments and dispatch to the selected command handler.
+
+    :return: Process exit code
+    """
     parser = build_parser()
     args = parser.parse_args()
 

@@ -1,6 +1,6 @@
 # YATSEE Audio Pipeline Overview
 
-A modular, local-first pipeline for acquiring, processing, transcribing, normalizing, and analyzing long-form civic meeting audio.
+A modular, local-first pipeline for processing, transcribing, normalizing, and analyzing long-form civic meeting media.
 
 ## Process Flow
 
@@ -15,69 +15,70 @@ Optional downstream workflows can build on those artifacts, including vector ind
 
 ## Pipeline Flow Overview
 
-1. `downloads/` → raw source media  
+1. `downloads/` → provider-neutral raw media input  
 2. `audio/` → converted 16 kHz mono transcription-ready audio  
 3. `transcripts_<model>/` → `.vtt` transcripts and transcript-derived text artifacts  
 4. `normalized/` → cleaned, structured `.txt`  
 5. `summary/` → `.md` or `.yaml` summaries  
 6. `yatsee_db/` → optional vector database files for retrieval workflows  
 
-YATSEE is designed as a staged pipeline with explicit boundaries between acquisition, audio preparation, transcript generation, transcript cleanup, and higher-level intelligence. While the stages work together as a unified pipeline, each stage can also be run independently as long as the input artifacts match the expected contract.
+YATSEE is designed as a staged pipeline with explicit boundaries between raw media intake, audio preparation, transcript generation, transcript cleanup, and higher-level intelligence. Each stage can be run independently as long as the input artifacts match the expected contract.
+
+Provider-specific acquisition is not part of the core pipeline. External acquisition tools, upload jobs, recording workflows, or manual copies can place compatible media into the raw media directory before YATSEE begins processing.
 
 ---
 
-## 1. Source Acquisition
+## 1. Raw Media Intake
 
-- **Command:** `yatsee source fetch`
-- **Input:** Entity-defined sources, typically YouTube-backed inputs
-- **Output:** downloaded source media in `downloads/`
-- **Tooling:** `yt-dlp`
+- **Input:** compatible media files supplied by an external tool, recorder, upload, copy, or manual import
+- **Default location:** `downloads/`
+- **Config:** `[media].input_dir`
+- **CLI override:** `yatsee audio format --input-dir <path>`
 
 ### Purpose
-Acquire source media for a configured entity and bring it into the local pipeline as raw input.
+
+Provide a stable, provider-neutral location for raw media files that will be normalized by the audio formatting stage.
 
 ### Notes
-- Supports entity-driven source resolution
-- Supports date filtering
-- Supports playlist cache generation
-- Designed to be safely repeatable with tracking of previously fetched content
 
-### Example
-```bash
-yatsee source fetch -e example_entity
-yatsee source fetch -e example_entity --date-after 20260101
-yatsee source fetch -e example_entity --make-playlist
-```
+- YATSEE does not need to know whether raw media came from a video platform, recorder, upload workflow, archive, or local filesystem.
+- `downloads/` is retained as the current default directory name for compatibility.
+- A future layout may rename this directory to `incoming/`, but the core contract is simply “raw compatible media exists here.”
 
 ---
 
 ## 2. Audio Formatting
 
 - **Command:** `yatsee audio format`
-- **Input:** downloaded media or user-specified source files
+- **Input:** raw media from `downloads/`, `[media].input_dir`, or a direct CLI path
 - **Output:** normalized `.wav` or `.flac` in `audio/`
 - **Tooling:** `ffmpeg`, `ffprobe`
 
 ### Purpose
-Convert raw source media into a consistent, transcription-ready audio format.
+
+Convert raw media into a consistent, transcription-ready audio format.
 
 ### Format Settings
+
 Typical output is normalized to:
+
 - mono audio
 - 16 kHz sample rate
 - `.wav` or `.flac`
 
 ### Notes
-- Supports chunked output for long recordings
-- Supports overlap between chunks to reduce boundary loss
-- Supports dry-run and force modes
-- Intended to produce stable audio artifacts for downstream ASR
+
+- Supports chunked output for long recordings.
+- Supports overlap between chunks to reduce boundary loss.
+- Supports dry-run and force modes.
+- Intended to produce stable audio artifacts for downstream ASR.
 
 ### Example
+
 ```bash
 yatsee audio format --entity example_entity
 yatsee audio format --entity example_entity --create-chunks --chunk-duration 300
-yatsee audio format --input-dir ./raw_audio --format wav
+yatsee audio format --input-dir ./raw_media --output-dir ./audio --format wav
 ```
 
 ---
@@ -90,16 +91,18 @@ yatsee audio format --input-dir ./raw_audio --format wav
 - **Tooling:** `openai-whisper` or `faster-whisper`
 
 ### Purpose
+
 Transform normalized audio into time-aligned transcript artifacts suitable for slicing, normalization, and summarization.
 
 ### Notes
-- Supports Whisper and faster-whisper execution paths
-- Supports CUDA, CPU, and Apple MPS selection
-- Supports chunked audio workflows
-- Merges near-overlapping transcript segments for readability
-- Produces VTT as the primary transcript artifact
+
+- Supports Whisper and faster-whisper execution paths.
+- Supports CUDA, CPU, and Apple MPS selection.
+- Supports chunked audio workflows.
+- Produces VTT as the primary transcript artifact.
 
 ### Example
+
 ```bash
 yatsee audio transcribe --entity example_entity
 yatsee audio transcribe --audio-input ./audio --model medium --faster
@@ -118,16 +121,18 @@ yatsee audio transcribe --audio-input ./single_file.mp3 --device cpu --lang es
 - **Tooling:** sentence-aware transcript slicing, optional embedding generation
 
 ### Purpose
+
 Convert VTT transcripts into cleaner transcript text and structured, timestamp-aligned segment records.
 
 ### Notes
-- Produces plain text transcript artifacts for later stages
-- Produces JSONL segments for retrieval-oriented workflows
-- Optional embedding generation for segment-level semantic indexing
-- Supports max-window limits for segment duration
-- Keeps timestamps aligned with segment content
+
+- Produces plain text transcript artifacts for later stages.
+- Produces JSONL segments for retrieval-oriented workflows.
+- Optional embedding generation supports segment-level semantic indexing.
+- Keeps timestamps aligned with segment content.
 
 ### Example
+
 ```bash
 yatsee transcript slice --entity example_entity
 yatsee transcript slice --entity example_entity --gen-embed
@@ -142,16 +147,19 @@ yatsee transcript slice --vtt-input ./transcripts --max-window 30 --force
 - **Tooling:** `spaCy` plus configured replacement rules
 
 ### Purpose
+
 Convert transcript text into cleaner, more consistent, AI-ready artifacts for summarization, embeddings, or semantic search.
 
 ### Notes
-- Supports sentence splitting with spaCy
-- Supports optional deep cleaning
-- Supports paragraph preservation
-- Applies configured replacement rules for recurring ASR mistakes
-- Produces stable normalized text artifacts for later stages
+
+- Supports sentence splitting with spaCy.
+- Supports optional deep cleaning.
+- Supports paragraph preservation.
+- Applies configured replacement rules for recurring ASR mistakes.
+- Produces stable normalized text artifacts for later stages.
 
 ### Example
+
 ```bash
 yatsee transcript normalize --entity example_entity
 yatsee transcript normalize --input-path ./transcripts_medium --output-dir ./normalized_out
@@ -168,48 +176,45 @@ yatsee transcript normalize --entity example_entity --deep-clean
 - **Tooling:** provider-based LLM execution through local runtimes, hosted APIs, or CLI-backed integrations
 
 ### Purpose
+
 Generate structured meeting summaries and other higher-level intelligence artifacts from transcript text using a configurable provider layer instead of a single hardcoded model runtime.
 
 ### Notes
-- Supports multi-pass summarization
-- Supports automatic meeting classification
-- Supports prompt routing by job type
-- Supports Markdown or YAML output
-- Supports manual prompt overrides
-- Supports chunk styles including word, sentence, and density-aware chunking
-- Supports provider-based execution through backends such as:
-  - Ollama
-  - llama.cpp-compatible OpenAI-style endpoints
-  - OpenAI
-  - Anthropic
-  - Codex CLI
-- Supports optional reference pricing so local runs can report an estimated hosted API-equivalent cost
-- Applies provider-target hardening so local-first execution remains the default security posture
+
+- Supports multi-pass summarization.
+- Supports automatic meeting classification.
+- Supports prompt routing by job type.
+- Supports Markdown or YAML output.
+- Supports manual prompt overrides.
+- Supports chunk styles including word, sentence, and density-aware chunking.
+- Supports provider-based execution through backends such as Ollama, llama.cpp-compatible endpoints, OpenAI, Anthropic, and CLI-backed providers.
+- Supports optional reference pricing so local runs can report an estimated hosted API-equivalent cost.
+- Applies provider-target hardening so local-first execution remains the default security posture.
 
 ### How It Works
+
 YATSEE classifies transcript content when appropriate, resolves prompt routing, and processes transcripts through a multi-pass summarization workflow. Transcripts are chunked based on word, sentence, or density-aware strategies depending on configuration and input size. Chunk-level summaries are refined across passes until a final structured report is produced.
 
-The intelligence stage now uses a provider abstraction. That means the summarization workflow stays the same even when the backend changes. The runtime provider used for generation can be local or remote, and the reference provider used for pricing can be different from the actual execution backend.
+The intelligence stage uses a provider abstraction. The summarization workflow stays the same even when the backend changes. The runtime provider used for generation can be local or remote, and the reference provider used for pricing can be different from the actual execution backend.
 
-Before execution, YATSEE also validates the configured provider target against its security policy. By default, that means:
+Before execution, YATSEE validates the configured provider target against its security policy. By default:
+
 - remote non-local targets for local HTTP providers are blocked
 - insecure HTTP for hosted providers is blocked
 - custom CLI executable targets are blocked unless explicitly allowed in config
 
 ### Example
+
 ```bash
 yatsee intel run -e example_entity
 
 yatsee intel run -e example_entity --model llama3:latest --llm-provider ollama --llm-provider-url http://localhost:11434
 
 yatsee intel run --txt-input ./normalized/council_meeting.txt --model mistral-nemo:latest --llm-provider llamacpp --llm-provider-url http://localhost:8080 --context "City Council - June 2025"
-
-yatsee intel run --txt-input ./normalized/finance_committee.txt --llm-provider codex_cli --llm-provider-url codex --model gpt-5.4 --show-pricing --pricing-provider openai --pricing-model gpt-5.4
-
-yatsee intel run --txt-input ./normalized/firehall_meeting.txt --llm-provider anthropic --llm-provider-url https://api.anthropic.com --llm-api-key "$ANTHROPIC_API_KEY" --model claude-opus-4.1
 ```
 
 ### Design Notes
+
 - Summarization is intentionally multi-pass because long civic transcripts routinely exceed comfortable single-pass context windows.
 - Prompt orchestration, provider execution, pricing estimation, chunking, and output writing are separate concerns internally.
 - This stage is designed to extract durable, structured intelligence rather than produce a generic free-form recap.
@@ -228,12 +233,14 @@ yatsee intel run --txt-input ./normalized/firehall_meeting.txt --llm-provider an
 - **Tooling:** `ChromaDB`, embedding models such as `BAAI/bge-small-en-v1.5`
 
 ### Purpose
+
 Generate embeddings and store retrieval-oriented artifacts for semantic search and downstream query workflows.
 
 ### Notes
-- Built on top of core pipeline outputs
-- Not required for the main audio-to-summary workflow
-- Intended for retrieval, semantic search, and exploration workflows
+
+- Built on top of core pipeline outputs.
+- Not required for the main audio-to-summary workflow.
+- Intended for retrieval, semantic search, and exploration workflows.
 
 ### Search
 
@@ -242,12 +249,14 @@ Generate embeddings and store retrieval-oriented artifacts for semantic search a
 - **Tooling:** Streamlit plus ChromaDB-backed retrieval
 
 ### Purpose
+
 Provide a simple queryable surface over processed YATSEE artifacts.
 
 ### Notes
-- Acts as a consumer of pipeline outputs
-- Separate from the core audio processing stages
-- Suitable for exploration, review, and retrieval workflows
+
+- Acts as a consumer of pipeline outputs.
+- Separate from the core audio processing stages.
+- Suitable for exploration, review, and retrieval workflows.
 
 ---
 
@@ -256,7 +265,7 @@ Provide a simple queryable surface over processed YATSEE artifacts.
 ```text
 data/
 └── <entity_handle>/
-    ├── downloads/                ← Raw source input (audio/video)
+    ├── downloads/                ← Raw media input
     ├── audio/                    ← Converted 16 kHz mono audio files
     ├── transcripts_<model>/      ← VTT transcripts and transcript-derived text artifacts
     ├── normalized/               ← Cleaned and structured text output
@@ -296,20 +305,14 @@ Global yatsee.toml
       └── prompts/
           └── research/
               └── prompts.toml  # entity-specific override for 'research'
-
-./data/
-  └── another_entity/
-      └── prompts/
-          └── research/
-              # no file present; falls back to global prompts/research/prompts.toml
 ```
 
 **Behavior:**
 
-- YATSEE first checks `data/<entity>/prompts/<job_profile>/prompts.toml`
-- If found, that file overrides the default job prompts
-- If not found, YATSEE falls back to `prompts/<job_profile>/prompts.toml`
-- If no prompt file exists, inline fallback prompts may be used depending on the stage
+- YATSEE first checks `data/<entity>/prompts/<job_profile>/prompts.toml`.
+- If found, that file overrides the default job prompts.
+- If not found, YATSEE falls back to `prompts/<job_profile>/prompts.toml`.
+- If no prompt file exists, inline fallback prompts may be used depending on the stage.
 
 ---
 
@@ -323,8 +326,7 @@ All major stages accept the entity handle so work is routed to the correct data 
 
 | Command | Purpose |
 |---|---|
-| `yatsee source fetch -e <entity>` | Acquire source media for an entity |
-| `yatsee audio format --entity <entity>` | Convert downloaded media to normalized audio |
+| `yatsee audio format --entity <entity>` | Convert raw media to normalized audio |
 | `yatsee audio transcribe --entity <entity>` | Transcribe audio files to VTT |
 | `yatsee transcript slice --entity <entity>` | Slice VTT into transcript text and structured segments |
 | `yatsee transcript normalize --entity <entity>` | Clean and normalize transcript text |

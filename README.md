@@ -4,15 +4,15 @@
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-YATSEE is a local-first, end-to-end data pipeline designed to systematically refine raw meeting audio into clean, searchable, and auditable intelligence. It automates the tedious work of downloading, transcribing, normalizing, and generating higher-level intelligence from unstructured conversations.
+YATSEE is a local-first, end-to-end data pipeline designed to systematically refine raw meeting media into clean, searchable, and auditable intelligence. It automates the tedious work of audio normalization, transcription, transcript cleanup, and higher-level intelligence generation from unstructured conversations.
 
 This is a local-first, privacy-respecting toolkit for anyone who wants to turn public noise into actionable intelligence. Local runtimes are the default and preferred path, while optional external providers are supported when needed.
 
 ## Why This Exists
 
-Public records are often public in name only. Civic business is frequently buried in four-hour livestreams and jargon-filled transcripts that are technically accessible but functionally opaque. The barrier to entry for an interested citizen is hours of time and dealing with complex jargon.
+Public records are often public in name only. Civic business is frequently buried in four-hour recordings and jargon-filled transcripts that are technically accessible but functionally opaque. The barrier to entry for an interested citizen is hours of time and dealing with complex jargon.
 
-YATSEE solves that by using a carefully tuned local-first LLM workflow to transform that wall of text into a high-signal summary. YATSEE can be set to extract specific votes, contracts, and policy debates that allow you to find what you are interested in fast. It's a tool for creating clarity and accountability that modern civic discourse requires.
+YATSEE solves that by using a carefully staged local-first workflow to transform raw media and transcript artifacts into high-signal summaries. It is a tool for creating the clarity and accountability that modern civic discourse requires.
 
 ## Demo
 
@@ -34,7 +34,6 @@ YATSEE solves that by using a carefully tuned local-first LLM workflow to transf
 YATSEE provides these primary command families:
 
 - `yatsee config ...`
-- `yatsee source fetch ...`
 - `yatsee audio format ...`
 - `yatsee audio transcribe ...`
 - `yatsee transcript slice ...`
@@ -48,7 +47,6 @@ YATSEE provides these primary command families:
 Required or commonly needed tools:
 
 - `ffmpeg`
-- `yt-dlp` for source fetching workflows
 
 ### Clone the repository
 
@@ -107,11 +105,10 @@ pip install -e .[full]
 Or install only the extra sets you need:
 
 ```bash
-pip install -e .[transcript]
-pip install -e .[intelligence]
-pip install -e .[llamacpp]
+pip install -e .[pipeline]
 pip install -e .[index]
 pip install -e .[ui]
+pip install -e .[llamacpp]
 ```
 
 ## Requirements
@@ -124,11 +121,10 @@ Minimum practical requirements:
 
 - **CPU:** modern 64-bit multi-core processor
 - **RAM:** 16 GB recommended
-- **Storage:** sufficient free disk space for source media, intermediate audio, transcripts, and derived artifacts
+- **Storage:** sufficient free disk space for raw media, intermediate audio, transcripts, and derived artifacts
 - **Python:** 3.11 or newer
 - **OS:** Linux or macOS recommended
 - **Required tools:** `ffmpeg`
-- **Optional tools:** `yt-dlp` for source fetching workflows
 
 A GPU is **not required**, but some stages, especially transcription, may be substantially slower on CPU-only systems.
 
@@ -217,13 +213,24 @@ yatsee config validate
 yatsee config resolve --entity example_entity
 ```
 
-### 4. Fetch source media
+### 4. Add raw media
 
-```bash
-yatsee source fetch -e example_entity --make-playlist
+Place compatible audio or video files in the entity raw media directory:
+
+```text
+data/<entity>/downloads/
 ```
 
-### 5. Process later stages as needed
+For example:
+
+```bash
+mkdir -p data/example_entity/downloads
+cp /path/to/meeting_audio_or_video.* data/example_entity/downloads/
+```
+
+You can also bypass the default raw media directory by passing a direct input path to `yatsee audio format` with `--input-dir`.
+
+### 5. Process pipeline stages as needed
 
 ```bash
 yatsee audio format --entity example_entity --dry-run
@@ -251,7 +258,7 @@ yatsee intel run -e example_entity --model mistral-nemo:latest --llm-provider ll
 
 At a high level, YATSEE processes recordings through staged boundaries:
 
-1. source acquisition
+1. raw media intake
 2. audio formatting
 3. transcription
 4. transcript slicing
