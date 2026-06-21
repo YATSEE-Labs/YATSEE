@@ -1,152 +1,336 @@
-# YATSEE: Prompt Orchestration Overview
+# YATSEE Prompt Orchestration Overview
 
-This guide explains how YATSEE manages the intelligence layer of the system. Instead of sending a full transcript to a model and hoping for a usable summary, YATSEE uses a structured, multi-stage process to ensure accuracy, consistency, and domain-specific formatting.
+This guide explains how YATSEE manages the LLM-backed intelligence layer.
+
+Instead of sending a full transcript to a model and hoping for a usable result, YATSEE uses layered prompt resolution, optional meeting classification, chunking, and multi-pass summarization.
+
+Prompt orchestration applies to:
+
+```bash
+yatsee intel run
+```
+
+It does not apply to deterministic signal extraction:
+
+```bash
+yatsee intel signals
+```
+
+Signals are mechanical extraction artifacts and do not require LLM prompt routing.
 
 ---
 
 ## 1. Prompt Hierarchy
 
-YATSEE resolves prompt instructions in a layered order. This allows global defaults, job-level customization, and entity-specific overrides to coexist without conflict.
+YATSEE resolves prompt instructions in layered order.
 
 Priority order:
 
-1. **Entity-Specific Prompts**  
+1. **Entity-specific prompts**  
    `data/<entity>/prompts/<job_profile>/prompts.toml`
 
-2. **Global Job Defaults**  
+2. **Global job defaults**  
    `prompts/<job_profile>/prompts.toml`
 
-3. **System Fallbacks**  
-   Hardcoded defaults in the Python pipeline.
+3. **System fallbacks**  
+   Inline fallback prompts in the Python pipeline, when available
 
-This structure allows each city, committee, or department to have its own customized “voice” or summary style without affecting any others.
+This allows global defaults, job-level customization, and entity-specific overrides to coexist.
 
-### Prompt override layout example:
-```
-./prompts/                      # default prompts for all entities
+## Prompt override layout
+
+```text
+./prompts/
   └── research/
-      └── prompts.toml          # default prompts & routing for 'research' job type
+      └── prompts.toml
 
 ./data/
-  └── defined_entity/           # entity-specific data
+  └── defined_entity/
       └── prompts/
           └── research/
-              └── prompts.toml  # full override for defined_entity 'research' job type
+              └── prompts.toml
 
 ./data/
-  └── generic_entity/           # another entity with no override
+  └── generic_entity/
       └── prompts/
           └── research/
-              # no file, falls back to default in prompts/research/prompts.toml
+              # no file, falls back to global prompts
+```
 
-**Behavior**:
+Behavior:
 
-  - Loader first checks `data/<entity>/prompts/<job_profile>/prompts.toml`.  
-  - If found → full override of defaults.  
-  - If not found → fall back to `prompts/<job_profile>/prompts.toml`.
+- YATSEE first checks `data/<entity>/prompts/<job_profile>/prompts.toml`
+- if found, that file overrides the global job prompts
+- if not found, YATSEE falls back to `prompts/<job_profile>/prompts.toml`
+- if no prompt file exists, inline fallback prompts may be used depending on the stage
+
+---
+
+## 2. Job Profiles
+
+The intelligence stage is driven by the `--job-profile` argument.
+
+Common profiles:
+
+```text
+civic
+research
+```
+
+Example:
+
+```bash
+yatsee intel run \
+  -e example_entity \
+  --job-profile civic
+```
+
+A job profile defines:
+
+- prompt file location
+- extraction expectations
+- routing behavior
+- final output shape
+- task-specific style and structure
+
+New specialized tasks can be introduced by adding a new prompt profile directory with a `prompts.toml`.
+
+---
+
+## 3. Automated Classification
+
+Before summarization begins, YATSEE may classify the meeting type.
+
+Classification uses transcript cues and context to identify likely meeting categories such as:
+
+```text
+city_council
+finance_committee
+committee_of_the_whole
+zoning_committee
+general
+```
+
+The selected meeting type is then used to resolve prompt routing.
+
+Disable auto-classification:
+
+```bash
+yatsee intel run \
+  -e example_entity \
+  --disable-auto-classification
+```
+
+Manual prompt overrides:
+
+```bash
+yatsee intel run \
+  -e example_entity \
+  --first-prompt <prompt_id> \
+  --second-prompt <prompt_id> \
+  --final-prompt <prompt_id>
 ```
 
 ---
 
-## 2. Automated Classification (Prompt Router)
+## 4. Multi-Pass Summarization Workflow
 
-Before summarization begins, YATSEE performs a classification step. Using an initial snippet from the transcript plus context about the entity, it determines the type of meeting.
+Long civic transcripts often exceed comfortable single-pass context windows. YATSEE processes them through a staged summarization workflow.
 
-**Mechanism:**
-- The model scans for domain indicators such as “Budget,” “Appropriation,” “Zoning,” “Variance,” etc.
-- Once classified, the system references `[prompt_router]` in the configuration to select the correct prompt set for the meeting type.
+### Pass 1: Chunk Extraction
 
-**Outcome:**  
-A batch of mixed files automatically routes to the appropriate templates such as finance, zoning, council, committee, or any custom meeting category.
+The transcript is split into chunks. Each chunk is summarized using detailed extraction prompts intended to preserve:
 
-### Config file routing/load order
+- actions
+- motions
+- votes
+- dollar amounts
+- named civic objects
+- public comments
+- speaker-specific context when available
+
+### Pass 2: Consolidation
+
+If the first-pass notes are still too large, YATSEE consolidates them. The goal is to reduce volume while preserving structure and important civic details.
+
+### Pass 3: Final Summary
+
+The final pass produces a polished structured report. Typical sections may include:
+
+- decisions
+- motions and votes
+- contracts or spending
+- ordinances or resolutions
+- property and development items
+- appointments
+- public comments
+- follow-up items
+- other discussion
+
+Exact sections depend on the selected prompt profile and meeting type.
+
+---
+
+## 5. Chunking Modes
+
+YATSEE supports multiple chunking styles.
+
+```bash
+yatsee intel run -e example_entity --chunk-style word
+yatsee intel run -e example_entity --chunk-style sentence
+yatsee intel run -e example_entity --chunk-style density
 ```
-Global TOML
-    |
-    +--> Entity handle
-            |
-            +--> Local config (hotwords, divisions, data_path)
-                    |
-                    +--> Pipeline stage (downloads, audio, transcripts)
+
+### Word chunking
+
+Simple chunking by approximate word count.
+
+### Sentence chunking
+
+Uses sentence boundaries where possible.
+
+### Density-aware chunking
+
+Uses semantic indicators to avoid splitting dense civic action sequences.
+
+Density keywords may include terms related to:
+
+- motions
+- seconds
+- votes
+- ordinances
+- resolutions
+- dollar amounts
+- approvals
+- public comments
+
+The goal is to keep high-value meeting actions together so the model sees enough context.
+
+---
+
+## 6. Provider-Based LLM Execution
+
+Prompt orchestration is independent of the runtime provider.
+
+The same prompt workflow can run through:
+
+```text
+ollama
+llamacpp
+openai
+anthropic
+codex_cli
 ```
 
----
+Provider settings include:
 
-## 3. Multi-Pass Summarization Workflow
+```text
+llm_provider
+llm_provider_url
+llm_api_key
+```
 
-Government transcripts routinely exceed the context window of most models. YATSEE processes them through a structured refinery pipeline that preserves detail across multiple passes.
+Provider hardening settings include:
 
-### Pass 1: First-Pass  
-The transcript is split into chunks. Each chunk is summarized using high-detail extraction prompts. This produces granular notes containing actions, motions, votes, dollar amounts, and speaker-specific content.
+```text
+llm_allow_remote
+llm_allow_insecure_http
+llm_allow_custom_executable
+```
 
-### Pass 2: Multi-Pass  
-If the volume of notes is still too large, the system performs a consolidation pass. Summaries are grouped and compressed while preserving structure so no decisions or financial details are lost.
+By default, YATSEE preserves local-first safety assumptions:
 
-### Pass 3: Final-Pass  
-The model takes all refined notes and produces a polished report with enforced sections such as:
-- Decisions
-- Motions and Votes
-- Public Comments
-- Recommendations
-- Follow-up Items
-
----
-
-## 4. Density-Based Chunking
-
-Instead of cutting the transcript arbitrarily, YATSEE uses semantic hotspots to determine safe chunk boundaries.
-
-### Mechanism
-A configurable `density_keywords` list highlights areas involving:
-- motions  
-- seconds  
-- votes  
-- ordinances  
-- resolutions  
-- financial amounts  
-
-Chunking attempts to keep these hotspots intact so context is not split across boundaries.
-
-### Benefit
-The model always sees the full action surrounding a meeting decision, improving accuracy and reducing hallucinations.
+- remote local-runtime targets are blocked unless allowed
+- insecure hosted HTTP is blocked unless allowed
+- custom executable targets are blocked unless allowed
 
 ---
 
-## 5. Job Types & Custom Behavior
+## 7. Prompt Inspection
 
-The pipeline is driven by the `--job-profile` argument. A job type defines:
-- which prompt hierarchy to use  
-- which extraction rules apply  
-- what formatting is expected in the final output  
+Print resolved prompts without running inference:
 
-### Examples
-- **civic**: Default civic meeting summarization workflow.  
-- **research**: A custom job type with prompts optimized for legal, policy, or historical investigations.  
-- **custom audits**: Any custom job type created simply by adding a folder with a new `prompts.toml`.
+```bash
+yatsee intel run \
+  -e example_entity \
+  --print-prompts
+```
 
-No Python modifications are required to introduce new specialized tasks. It is 100% config driven.
+This is useful for verifying:
+
+- selected job profile
+- prompt file path
+- fallback behavior
+- prompt IDs
+- prompt text
+
+---
+
+## 8. Chunk Output Inspection
+
+Write intermediate chunk outputs:
+
+```bash
+yatsee intel run \
+  -e example_entity \
+  --enable-chunk-writer
+```
+
+This helps isolate whether problems begin at:
+
+- chunking
+- prompt routing
+- first-pass extraction
+- consolidation
+- final synthesis
+
+---
+
+## 9. Prompt Orchestration vs Meeting Signals
+
+`yatsee intel run` is LLM-backed and uses prompt orchestration.
+
+```bash
+yatsee intel run -e example_entity
+```
+
+`yatsee intel signals` is deterministic and does not use prompt routing or LLM inference.
+
+```bash
+yatsee intel signals -e example_entity
+```
+
+Signals can be used as a QA artifact alongside summaries. They can help identify mechanical evidence candidates such as motions, money references, people mentions, and low-confidence lines.
 
 ---
 
 ## Summary: How the Intelligence Layer Works
 
-1. **Classify**  
-   Identify the meeting type automatically using transcript cues.
+1. **Resolve prompts**  
+   Load entity-specific, global, or fallback prompts.
 
-2. **Chunk**  
-   Split the transcript into size-appropriate sections while preserving semantic clusters like motions and votes.
+2. **Classify**  
+   Identify meeting type when auto-classification is enabled.
 
-3. **Extract**  
-   Perform detailed extraction on each chunk for names, amounts, actions, decisions, and topic markers.
+3. **Chunk**  
+   Split transcript text while preserving important context.
 
-4. **Refine**  
-   Consolidate hundreds of notes into coherent, structured summaries.
+4. **Extract**  
+   Generate detailed chunk-level notes.
 
-5. **Audit**  
-   Produce a final, standardized Markdown report.
+5. **Refine**  
+   Consolidate notes into structured intermediate summaries.
+
+6. **Synthesize**  
+   Produce final Markdown or YAML output.
+
+7. **Inspect**  
+   Use prompt printing, chunk writing, and deterministic signals to debug quality.
 
 ---
 
 ## Final Notes
 
-The orchestration system enables YATSEE to process multi-hour meetings reliably. By combining classification, density-aware chunking, and multi-pass refinement, the pipeline scales to very large transcripts without losing detail or structure. The output is consistent across meeting types and remains customizable for each entity and job type.
+Prompt orchestration exists because long civic transcripts require more structure than a single generic prompt.
+
+Good prompts cannot fix bad transcripts. Confirm audio, transcription, and normalization quality before tuning prompt behavior.
