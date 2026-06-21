@@ -86,7 +86,15 @@ def register_intel_commands(subparsers: argparse._SubParsersAction) -> None:
     )
     intel_run_parser.set_defaults(handler=handle_intel_run)
 
-
+    intel_signals_parser = intel_subparsers.add_parser(
+        "signals",
+        help="Generate deterministic meeting signal artifacts",
+    )
+    intel_signals_parser.add_argument("-e", "--entity", help="Entity handle to process")
+    intel_signals_parser.add_argument("-i", "--input-path", help="Normalized TXT file or directory")
+    intel_signals_parser.add_argument("-o", "--output-dir", help="Directory to save meeting signal artifacts")
+    intel_signals_parser.add_argument("--force", action="store_true", help="Overwrite existing outputs")
+    intel_signals_parser.set_defaults(handler=handle_intel_signals)
 
 
 def handle_intel_run(args: argparse.Namespace) -> int:
@@ -146,5 +154,54 @@ def handle_intel_run(args: argparse.Namespace) -> int:
                     f"  Reference pricing ({ref_provider}/{ref_model}): "
                     f"${estimated_cost:.4f}"
                 )
+
+    return 0
+
+
+def handle_intel_signals(args: argparse.Namespace) -> int:
+    """
+    Run deterministic meeting-signal extraction and print a compact stage report.
+
+    The signal stage emits mechanical evidence candidates from normalized
+    transcript text. It does not produce final meeting records or official
+    minutes.
+
+    :param args: Parsed CLI arguments
+    :return: Process exit code
+    """
+    from yatsee.intel.signals import run_signals_stage
+
+    result = run_signals_stage(
+        global_config_path=args.config,
+        entity=args.entity,
+        input_path=args.input_path,
+        output_dir=args.output_dir,
+        force=args.force,
+    )
+
+    print(f"Input path: {result['input_path']}")
+    print(f"Output directory: {result['output_dir']}")
+    print(f"Discovered files: {result['discovered']}")
+    print(f"Written files: {result['written']}")
+    print(f"Skipped files: {result['skipped']}")
+
+    count_fields = (
+        ("action_count", "Action signals"),
+        ("roll_call_count", "Roll call signals"),
+        ("money_count", "Money signals"),
+        ("civic_object_count", "Civic object signals"),
+        ("question_count", "Question signals"),
+        ("people_count", "People signals"),
+        ("low_confidence_count", "Low-confidence lines"),
+    )
+
+    for item in result["results"]:
+        print(f"- {item['base_name']}")
+        print(f"  Output: {item['output_path']}")
+        print(f"  Written: {item['written']}")
+
+        for key, label in count_fields:
+            if key in item:
+                print(f"  {label}: {item[key]}")
 
     return 0
