@@ -200,14 +200,13 @@ python scripts/qa_transcript_report.py --json qa_report.json
 python scripts/qa_reset_vtt_for_rebuild.py --entity <entity> --qa-report qa_report.json
 ```
 
-If the reset helper selects transcripts for rebuild, rerun transcription with the QA cleanup profile:
+If the reset helper selects transcripts for rebuild, rerun transcription with the standard defaults:
 
 ```bash
 yatsee audio transcribe \
   -e <entity> \
   --faster \
-  --get-chunks \
-  --transcription-profile qa_cleanup
+  --get-chunks
 ```
 
 The QA boundary is intentionally strict: ASR loop/content corruption findings are rebuild signals, not fixer targets. Timestamp-only issues may be reported or later repaired by conservative QA fix tooling.

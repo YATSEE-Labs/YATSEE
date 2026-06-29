@@ -299,8 +299,7 @@ yatsee audio transcribe \
 yatsee audio transcribe \
   -e example_entity \
   --faster \
-  --get-chunks \
-  --transcription-profile qa_cleanup
+  --get-chunks
 ```
 
 ---
@@ -349,17 +348,16 @@ python scripts/qa_reset_vtt_for_rebuild.py \
   --apply
 ```
 
-Then rerun transcription with the QA cleanup profile. The transcript hash tracker will allow only the reset files to rebuild.
+Then rerun transcription with the standard defaults. The transcript hash tracker will allow only the reset files to rebuild.
 
 ```bash
 yatsee audio transcribe \
   -e example_entity \
   --faster \
-  --get-chunks \
-  --transcription-profile qa_cleanup
+  --get-chunks
 ```
 
-For ASR loop findings, rebuilding with the same transcription behavior may reproduce the same failure. The `qa_cleanup` profile disables previous-text conditioning to reduce loop propagation. Use it for QA-selected rebuilds, not as a general accuracy guarantee.
+The default transcription profile is the QA-safe baseline. Use QA-selected rebuilds only for transcripts that were reset after review.
 
 ## QA boundary
 
@@ -719,14 +717,13 @@ python scripts/qa_reset_vtt_for_rebuild.py \
   --apply
 ```
 
-Then run transcription again with the QA cleanup profile before slicing or normalization:
+Then run transcription again with the standard defaults before slicing or normalization:
 
 ```bash
 yatsee audio transcribe \
   -e example_entity \
   --faster \
-  --get-chunks \
-  --transcription-profile qa_cleanup
+  --get-chunks
 ```
 
 ## Slice stage finds nothing

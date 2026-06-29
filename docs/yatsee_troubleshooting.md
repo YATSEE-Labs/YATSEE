@@ -450,11 +450,10 @@ python scripts/qa_reset_vtt_for_rebuild.py \
 yatsee audio transcribe \
   -e <entity> \
   --faster \
-  --get-chunks \
-  --transcription-profile qa_cleanup
+  --get-chunks
 ```
 
-For ASR loop findings, rebuilding with the same transcription behavior may reproduce the same failure. Use `qa_cleanup` for QA-selected rebuilds because it disables previous-text conditioning to reduce loop propagation.
+The default transcription profile is the QA-safe baseline. Use QA-selected rebuilds only for transcripts that were reset after review.
 
 QA action boundaries:
 

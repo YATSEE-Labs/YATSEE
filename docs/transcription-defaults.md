@@ -45,7 +45,7 @@ meeting procedure split across adjacent transcript segments.
 To rebuild transcripts with the current defaults:
 
 ```bash
-yatsee audio transcribe -e <entity> --faster --get-chunks --force
+yatsee audio transcribe -e <entity> --faster --get-chunks
 ```
 
 After rebuilding VTT files, regenerate downstream transcript artifacts:

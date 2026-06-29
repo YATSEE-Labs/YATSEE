@@ -21,8 +21,9 @@ Common workflow:
     yatsee audio transcribe \
       -e us_il_freeport_city_council \
       --faster \
-      --get-chunks \
-      --transcription-profile qa_cleanup
+      --get-chunks
+
+The reset helper prints the standard transcription command because the default transcription profile is now the QA-safe baseline.
 
 The script:
     - accepts explicit source IDs / stems / VTT filenames
@@ -87,7 +88,6 @@ TRANSCRIPT_TRACKER_HINTS = {
 }
 
 DEFAULT_QA_STATUSES = {"block", "rerun"}
-DEFAULT_REBUILD_TRANSCRIPTION_PROFILE = "qa_cleanup"
 
 
 class ResetError(Exception):
@@ -611,14 +611,7 @@ def build_rebuild_command(args: argparse.Namespace) -> list[str]:
     else:
         command.append("<entity>")
 
-    command.extend(
-        [
-            "--faster",
-            "--get-chunks",
-            "--transcription-profile",
-            args.rebuild_profile,
-        ]
-    )
+    command.extend(["--faster", "--get-chunks"])
 
     return command
 
@@ -636,12 +629,6 @@ def print_rebuild_command(args: argparse.Namespace, apply: bool) -> None:
         print("Recommended rebuild command after applying the reset:")
 
     print(f"  {shlex.join(build_rebuild_command(args))}")
-
-    if args.rebuild_profile == DEFAULT_REBUILD_TRANSCRIPTION_PROFILE:
-        print(
-            "  qa_cleanup is recommended for QA-selected ASR loop rebuilds "
-            "because it disables previous-text conditioning."
-        )
 
 def delete_vtts(vtt_paths: Sequence[Path], apply: bool) -> int:
     """
@@ -724,15 +711,6 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help=(
             "Relax tracker auto-discovery to any line-based file with "
             "tracker/hash/processed in the name."
-        ),
-    )
-    parser.add_argument(
-        "--rebuild-profile",
-        default=DEFAULT_REBUILD_TRANSCRIPTION_PROFILE,
-        choices=["default", "qa_cleanup"],
-        help=(
-            "Transcription profile to show in the recommended rebuild command. "
-            "Defaults to qa_cleanup for QA-selected ASR loop rebuilds."
         ),
     )
     parser.add_argument(

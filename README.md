@@ -278,7 +278,7 @@ python scripts/qa_reset_vtt_for_rebuild.py \
   --qa-report qa_report.json
 ```
 
-Apply only after reviewing the matched files and tracker changes, then rebuild with the loop-resistant QA cleanup transcription profile:
+Apply only after reviewing the matched files and tracker changes, then rebuild with the standard transcription defaults:
 
 ```bash
 python scripts/qa_reset_vtt_for_rebuild.py \
@@ -289,11 +289,10 @@ python scripts/qa_reset_vtt_for_rebuild.py \
 yatsee audio transcribe \
   -e example_entity \
   --faster \
-  --get-chunks \
-  --transcription-profile qa_cleanup
+  --get-chunks
 ```
 
-For ASR loop findings, rebuilding with the same transcription behavior may reproduce the same failure. The `qa_cleanup` profile disables previous-text conditioning to reduce loop propagation. These helpers remain experimental while transcript QA rules are being validated.
+The default transcription profile is the QA-safe baseline. These helpers remain experimental while transcript QA rules are being validated.
 
 ---
 

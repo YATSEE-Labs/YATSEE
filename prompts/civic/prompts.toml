@@ -1095,7 +1095,7 @@ Transcript:
 {text}
 
 Instructions:
-- Consolidate all agenda items, discussion points, motions, votes, and public comments into one authoritative record.
+- Consolidate all agenda items, discussion points, motions, votes, and public comments into one structured review summary.
 - Preserve **explicitly present in the transcript or context**; Consolidate duplicates only where content overlaps.
 - Include vote outcomes exactly as stated. If a roll call vote is present, list each individual vote if included.
 - Retain explicit speaker attribution whenever available. Refer to unnamed speakers generically (e.g., 'a resident said...').
@@ -1107,7 +1107,7 @@ Instructions:
 - Remove only repeated meeting titles, headers, or segment markers.
 - Keep all factual content intact.
 
-Output: A single, internally consistent Markdown summary suitable as the canonical record of the meeting. Do not include explanations or additional commentary.
+Output: A single, internally consistent Markdown summary suitable as a consolidated review summary of the meeting. Do not include explanations or additional commentary.
 """
 
 [prompts.civic_scan]
@@ -1116,7 +1116,7 @@ You are a data synthesizer. Your task is to merge multiple summaries of a single
 
 ### GUIDELINES & CONSTRAINTS
 - Capture **all motions and votes**, including failed votes, first readings, deferrals, and procedural attempts. Include who made the motion, who seconded, and vote outcomes.
-- Consolidate all agenda items, discussion points, motions, votes, and **public comments** into a single authoritative record.
+- Consolidate all agenda items, discussion points, motions, votes, and **public comments** into a single structured review summary.
 - Consolidate overlapping content into a coherent narrative without losing information.
 - Keep resolution and ordinance numbers as stated.
 - Group content under topical headers in this order:

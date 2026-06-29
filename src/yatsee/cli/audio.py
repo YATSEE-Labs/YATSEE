@@ -46,11 +46,8 @@ def register_audio_commands(subparsers: argparse._SubParsersAction) -> None:
     transcribe_parser.add_argument(
         "--transcription-profile",
         default="default",
-        choices=["default", "qa_cleanup"],
-        help=(
-            "Transcription behavior preset. Use qa_cleanup when rebuilding "
-            "transcripts flagged by QA for ASR loop artifacts."
-        ),
+        choices=["default"],
+        help="Transcription behavior preset. Default is the supported baseline.",
     )
     transcribe_parser.add_argument("-l", "--lang", default="en", help="Language code or 'auto'")
     transcribe_parser.add_argument(
