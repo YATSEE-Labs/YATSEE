@@ -22,6 +22,7 @@ The pipeline is intentionally staged. Each stage produces useful artifacts and c
 - [Stage 1: Raw Media Intake](#stage-1-raw-media-intake)
 - [Stage 2: Audio Formatting and Chunking](#stage-2-audio-formatting-and-chunking)
 - [Stage 3: Transcription](#stage-3-transcription)
+- [Stage 3b: Experimental Transcript QA](#stage-3b-experimental-transcript-qa)
 - [Stage 4a: Slicing Transcripts into Segments](#stage-4a-slicing-transcripts-into-segments)
 - [Stage 4b: Transcript Normalization and Structure](#stage-4b-transcript-normalization-and-structure)
 - [Stage 5a: Intelligence and Summarization](#stage-5a-intelligence-and-summarization)
@@ -269,6 +270,7 @@ data/example_entity/transcripts_medium/
 -g / --get-chunks
 -m / --model
 --faster
+--transcription-profile
 -l / --lang
 -d / --device
 -v / --verbose
@@ -293,7 +295,75 @@ yatsee audio transcribe \
   -e example_entity \
   --faster \
   --device cpu
+
+yatsee audio transcribe \
+  -e example_entity \
+  --faster \
+  --get-chunks
 ```
+
+---
+
+# Stage 3b: Experimental Transcript QA
+
+## Purpose
+
+Inspect VTT transcripts before slicing, normalization, summarization, or signal extraction. This is especially useful for long batch runs where ASR artifacts can otherwise flow into every downstream stage.
+
+The current QA helpers are experimental scripts, not formal CLI commands. They are intended to make transcript review and rebuild decisions repeatable while QA rules are tested against real outputs. The normal pipeline does not require this step.
+
+## Input
+
+VTT transcript files under:
+
+```text
+data/<entity>/transcripts_<model>/
+```
+
+## Output
+
+Human-readable QA findings and optional JSON reports for rebuild/reset workflows.
+
+## Current helper scripts
+
+```bash
+python scripts/qa_transcript_report.py --details
+python scripts/qa_transcript_report.py --json qa_report.json
+```
+
+To reset bad VTTs for rebuild from a QA JSON report:
+
+```bash
+python scripts/qa_reset_vtt_for_rebuild.py \
+  --entity example_entity \
+  --qa-report qa_report.json
+```
+
+Add `--apply` only after reviewing the dry-run output.
+
+```bash
+python scripts/qa_reset_vtt_for_rebuild.py \
+  --entity example_entity \
+  --qa-report qa_report.json \
+  --apply
+```
+
+Then rerun transcription with the standard defaults. The transcript hash tracker will allow only the reset files to rebuild.
+
+```bash
+yatsee audio transcribe \
+  -e example_entity \
+  --faster \
+  --get-chunks
+```
+
+The default transcription profile is the QA-safe baseline. Use QA-selected rebuilds only for transcripts that were reset after review.
+
+## QA boundary
+
+QA can report ASR loops and prepare bad transcripts for rebuild. QA fixes should not repair ASR loop content. Content corruption must be handled by retranscription or future chunk-level fallback.
+
+Timestamp-only issues, such as impossible cue durations or minor cue overlaps, may become safe repair targets in a future timestamp fixer.
 
 ---
 
@@ -413,6 +483,9 @@ yatsee transcript normalize \
 
 # Stage 5a: Intelligence and Summarization
 
+Canonical command: `yatsee intel summarize`. The older `yatsee intel run` command remains available as an alias.
+
+
 ## Purpose
 
 Generate structured summaries or higher-level intelligence artifacts from transcript text using a configurable provider layer.
@@ -448,7 +521,7 @@ data/<entity>/summary_<model>/
 -m / --model
 --llm-provider
 --llm-provider-url
---llm-api-key
+--llm-api-key    # accepted, but prefer llm_api_key_env or YATSEE_LLM_API_KEY
 --show-pricing
 --no-show-pricing
 --pricing-provider
@@ -471,19 +544,19 @@ data/<entity>/summary_<model>/
 ## Usage examples
 
 ```bash
-yatsee intel run -e example_entity
+yatsee intel summarize -e example_entity
 
-yatsee intel run \
+yatsee intel summarize \
   -e example_entity \
   --llm-provider ollama \
   --llm-provider-url http://localhost:11434 \
   --model mistral-nemo:latest
 
-yatsee intel run \
+yatsee intel summarize \
   -e example_entity \
   --print-prompts
 
-yatsee intel run \
+yatsee intel summarize \
   -e example_entity \
   --enable-chunk-writer
 ```
@@ -569,7 +642,7 @@ yatsee audio format -e example_county_board
 yatsee audio transcribe -e example_county_board --faster
 yatsee transcript slice -e example_county_board --force
 yatsee transcript normalize -e example_county_board --force
-yatsee intel run -e example_county_board
+yatsee intel summarize -e example_county_board
 yatsee intel signals -e example_county_board
 ```
 
@@ -628,6 +701,31 @@ yatsee audio format -e example_entity --dry-run
 find data/example_entity/audio -type f
 ```
 
+## Transcript QA finds ASR loops
+
+```bash
+python scripts/qa_transcript_report.py --details
+python scripts/qa_transcript_report.py --json qa_report.json
+```
+
+For transcripts marked `rerun` or `block`, reset the affected VTTs and tracker rows before retranscribing:
+
+```bash
+python scripts/qa_reset_vtt_for_rebuild.py \
+  --entity example_entity \
+  --qa-report qa_report.json \
+  --apply
+```
+
+Then run transcription again with the standard defaults before slicing or normalization:
+
+```bash
+yatsee audio transcribe \
+  -e example_entity \
+  --faster \
+  --get-chunks
+```
+
 ## Slice stage finds nothing
 
 ```bash
@@ -652,7 +750,7 @@ Check in this order:
 4. normalized transcript quality
 5. entity-specific replacements
 6. local people / titles / divisions
-7. prompt profile
+7. supported civic prompt profile wiring
 8. model choice
 
 ## Signals are missing
@@ -672,6 +770,7 @@ The durable workflow is:
 raw media
 → formatted audio
 → VTT transcript
+→ optional transcript QA
 → sliced text
 → normalized transcript
 → optional LLM summary

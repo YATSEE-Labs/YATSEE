@@ -99,25 +99,6 @@ Return a JSON array of objects with this exact structure:
 If no factual statements are present, return an empty array: []
 """
 
-[prompts.action_items]
-text = """
-You are an assistant producing structured meeting minutes from transcripts.
-
-Context: {context}
-
-Transcript:
-{text}
-
-Instructions:
-- Extract actionable content: motions, decisions, follow-ups, assigned tasks.
-- Exclude commentary or informal remarks.
-- Omit empty sections.
-- Avoid repeating headers.
-- Use **bold headers** for major topics.
-- Use **plain Arabic numerals** for numbered items.
-- Use they/them pronouns unless gender is explicit.
-"""
-
 [prompts.roll_call_only]
 text = """
 You are an assistant producing structured meeting minutes from transcripts.

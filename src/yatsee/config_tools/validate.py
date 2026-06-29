@@ -12,7 +12,7 @@ from typing import Any, Dict, List
 
 from yatsee.core.config import get_entity_registry_entry
 from yatsee.core.errors import ValidationError
-from yatsee.core.paths import get_entity_config_path
+from yatsee.core.paths import get_entity_config_path, validate_entity_handle
 
 
 def validate_global_config(global_cfg: Dict[str, Any]) -> List[str]:
@@ -33,6 +33,10 @@ def validate_global_config(global_cfg: Dict[str, Any]) -> List[str]:
         raise ValidationError("Global config is missing required [entities] section.")
     messages.append("Found [entities] section.")
 
+    for entity in global_cfg.get("entities", {}):
+        validate_entity_handle(entity)
+    messages.append("Entity handles use safe naming.")
+
     return messages
 
 
@@ -46,6 +50,7 @@ def validate_entity_config(global_cfg: Dict[str, Any], entity: str) -> List[str]
     :raises ValidationError: If required files or fields are missing
     """
     messages: List[str] = []
+    entity = validate_entity_handle(entity)
 
     entity_registry = get_entity_registry_entry(global_cfg, entity)
     messages.append(f"Found entity '{entity}' in global registry.")

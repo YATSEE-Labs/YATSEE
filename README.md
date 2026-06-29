@@ -1,26 +1,39 @@
-# YATSEE Audio Extraction Pipeline
+# YATSEE
 
 ## Yet Another Tool for Speech Extraction & Enrichment
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-YATSEE is a local-first pipeline for turning raw meeting media into clean, auditable artifacts: formatted audio, transcripts, normalized text, summaries, deterministic meeting signals, and optional search/index data.
+YATSEE is a local-first, source-agnostic pipeline for turning raw meeting media into clean, auditable artifacts: formatted audio, transcripts, normalized text, civic summaries, deterministic meeting signals, and optional downstream search/index data.
 
 The system is intentionally staged:
 
 ```text
-acquire source media
+supply source media
   ↓
-format → transcribe → slice → normalize → summarize / extract signals
+format → transcribe → optional QA → slice → normalize → summarize / extract signals
   ↓
 index → search / investigate
 ```
 
-YATSEE core owns the processing middle of the workflow. Source acquisition and downstream investigation/search are separate concerns connected through local files.
+YATSEE core owns the processing middle of the workflow. Source acquisition, hosted upload flows, publication, and downstream investigation/search are adjacent concerns connected through local files or explicit handoff artifacts.
 
 ## Why This Exists
 
 Public records are often public in name only. Civic business can be buried in long recordings, inconsistent transcripts, and procedural jargon. YATSEE creates durable local artifacts that make those records easier to inspect, summarize, search, and audit.
+
+## Current Scope
+
+YATSEE uses profile-driven intelligence workflows. The profile system is meant to support multiple artifact types through shared routing and validation rather than one-off processing paths. Individual profile quality and maturity are scoped deliberately; unfinished profiles should not block core pipeline, security, or packaging work.
+
+The durable contract is:
+
+- compatible media exists locally or is handed off as a local artifact
+- each pipeline stage has explicit input and output artifacts
+- entity-local config supplies names, titles, divisions, replacements, and context
+- local or hosted LLM providers are selected through a hardened provider boundary
+- generated summaries are useful review artifacts, not official records
+
 
 ## Demo
 
@@ -62,9 +75,12 @@ yatsee audio transcribe -e <entity>
 yatsee transcript slice -e <entity>
 yatsee transcript normalize -e <entity>
 
-yatsee intel run -e <entity>
+yatsee intel summarize -e <entity>
 yatsee intel signals -e <entity>
 ```
+
+
+`yatsee intel summarize` is the canonical summary command. The older `yatsee intel run` command remains available as a compatibility alias.
 
 The package can also be executed directly:
 
@@ -183,12 +199,19 @@ llm_provider
 llm_provider_url
 ```
 
-Provider hardening settings include:
+Provider hardening settings make trust boundaries explicit:
 
 ```text
-llm_allow_remote
-llm_allow_insecure_http
-llm_allow_custom_executable
+llm_allow_loopback_http     # allow localhost/127.0.0.1 HTTP for local model servers
+llm_allow_remote            # allow off-box provider targets
+llm_allow_insecure_http     # allow non-loopback HTTP targets
+llm_allow_custom_executable # allow non-default CLI provider executables
+```
+
+For hosted API keys, prefer an environment variable over config files or command-line flags:
+
+```toml
+llm_api_key_env = "OPENAI_API_KEY"
 ```
 
 If omitted, provider hardening defaults to safer local-first behavior.
@@ -230,9 +253,46 @@ yatsee audio format -e example_entity
 yatsee audio transcribe -e example_entity --faster
 yatsee transcript slice -e example_entity --force
 yatsee transcript normalize -e example_entity --force
-yatsee intel run -e example_entity
+yatsee intel summarize -e example_entity
 yatsee intel signals -e example_entity
 ```
+
+---
+
+## Experimental Transcript QA Helpers
+
+The normal quick-start pipeline does not require transcript QA. For long transcription batches, use the experimental helpers as a separate review/recovery workflow before slicing or summarization.
+
+Inspect VTT quality and write a machine-readable report:
+
+```bash
+python scripts/qa_transcript_report.py --details
+python scripts/qa_transcript_report.py --json qa_report.json
+```
+
+If transcripts are marked for rebuild, reset only those VTT artifacts and tracker entries. Start with a dry run:
+
+```bash
+python scripts/qa_reset_vtt_for_rebuild.py \
+  --entity example_entity \
+  --qa-report qa_report.json
+```
+
+Apply only after reviewing the matched files and tracker changes, then rebuild with the standard transcription defaults:
+
+```bash
+python scripts/qa_reset_vtt_for_rebuild.py \
+  --entity example_entity \
+  --qa-report qa_report.json \
+  --apply
+
+yatsee audio transcribe \
+  -e example_entity \
+  --faster \
+  --get-chunks
+```
+
+The default transcription profile is the QA-safe baseline. These helpers remain experimental while transcript QA rules are being validated.
 
 ---
 
@@ -266,9 +326,10 @@ YATSEE follows a layered configuration strategy:
 
 For intelligence-stage providers, YATSEE applies security policy by default:
 
-- remote non-local targets for local HTTP providers are blocked unless explicitly allowed
-- insecure HTTP for hosted providers is blocked unless explicitly allowed
-- custom CLI executable targets are blocked unless explicitly allowed
+- loopback HTTP is controlled by the narrow `llm_allow_loopback_http` flag
+- off-box provider targets require `llm_allow_remote=true`
+- non-loopback plain HTTP additionally requires `llm_allow_insecure_http=true`
+- custom CLI executable targets require `llm_allow_custom_executable=true`
 
 ## Search and Indexing
 

@@ -29,40 +29,10 @@ from typing import Any, Dict, List, Optional
 
 from yatsee.core.config import load_entity_config, load_global_config
 from yatsee.core.discovery import discover_files
-from yatsee.core.errors import ConfigError, ValidationError
+from yatsee.core.errors import ValidationError
+from yatsee.core.io import read_text, write_text
 
 SUPPORTED_INPUT_EXTENSIONS = (".txt",)
-
-
-def load_text(path: str) -> str:
-    """
-    Read a UTF-8 transcript text file.
-
-    :param path: Path to the input text file
-    :return: Raw file contents
-    :raises ConfigError: If the file cannot be read
-    """
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            return handle.read()
-    except OSError as exc:
-        raise ConfigError(f"Failed to read transcript '{path}': {exc}") from exc
-
-
-def write_text(path: str, content: str) -> None:
-    """
-    Write normalized transcript text to disk.
-
-    :param path: Output file path
-    :param content: Normalized text content
-    :return: None
-    :raises ConfigError: If writing fails
-    """
-    try:
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write(content)
-    except OSError as exc:
-        raise ConfigError(f"Failed to write normalized transcript '{path}': {exc}") from exc
 
 
 def normalize_text(
@@ -726,7 +696,7 @@ def run_normalize_stage(
             messages.append(f"Skipped existing normalized transcript: {out_path}")
             continue
 
-        raw_text = load_text(src_path)
+        raw_text = read_text(src_path)
 
         final_text = normalize_transcript_text(
             raw_text=raw_text,

@@ -37,6 +37,7 @@ def validate_provider_target(
     target: str,
     allow_remote: bool = False,
     allow_insecure_http: bool = False,
+    allow_loopback_http: bool = True,
     allow_custom_executable: bool = False,
 ) -> None:
     """
@@ -45,13 +46,15 @@ def validate_provider_target(
     This function applies security policy to either an HTTP(S) provider target
     or a CLI executable target. For network targets, transport security and
     locality are validated independently:
-    - plain HTTP requires explicit opt-in
-    - any off-box target requires explicit opt-in
+    - loopback HTTP requires the narrow llm_allow_loopback_http opt-in
+    - non-loopback plain HTTP requires explicit insecure HTTP opt-in
+    - any off-box target requires explicit remote opt-in
 
     :param provider_name: Provider identifier
     :param target: URL or executable target
     :param allow_remote: Whether to allow any off-box provider target
-    :param allow_insecure_http: Whether to allow plain HTTP provider targets
+    :param allow_insecure_http: Whether to allow non-loopback plain HTTP provider targets
+    :param allow_loopback_http: Whether to allow loopback plain HTTP provider targets
     :param allow_custom_executable: Whether to allow custom executable targets for CLI providers
     :raises ProviderConfigError: If the target is missing, malformed, or disallowed
     """
@@ -85,18 +88,24 @@ def validate_provider_target(
             f"Provider target for '{normalized_provider}' must include a hostname."
         )
 
-    # Treat transport security separately from locality. Any plain HTTP target
-    # requires explicit opt-in, regardless of provider type.
-    if scheme == "http" and not allow_insecure_http:
-        raise ProviderConfigError(
-            f"Provider '{normalized_provider}' target '{normalized_target}' uses insecure HTTP. "
-            "Set llm_allow_insecure_http=true to allow plain HTTP targets."
-        )
-
     # Treat locality strictly: only loopback is local by default. Any off-box
     # host, including private LAN ranges and container/service addresses,
-    # requires explicit opt-in.
+    # requires explicit opt-in. Loopback HTTP has its own narrow opt-in so
+    # local Ollama can work without enabling broad insecure HTTP behavior.
     is_local = _is_local_host(hostname)
+
+    if scheme == "http" and is_local and not allow_loopback_http:
+        raise ProviderConfigError(
+            f"Provider '{normalized_provider}' target '{normalized_target}' uses loopback HTTP. "
+            "Set llm_allow_loopback_http=true to allow plain HTTP loopback targets."
+        )
+
+    if scheme == "http" and not is_local and not allow_insecure_http:
+        raise ProviderConfigError(
+            f"Provider '{normalized_provider}' target '{normalized_target}' uses insecure non-loopback HTTP. "
+            "Set llm_allow_insecure_http=true to allow plain HTTP off-box targets."
+        )
+
     if not is_local and not allow_remote:
         raise ProviderConfigError(
             f"Provider '{normalized_provider}' target '{normalized_target}' is off-box. "

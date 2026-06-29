@@ -7,7 +7,7 @@ Most configuration can stay at defaults. The parts that matter most are:
 - entity registry
 - entity-local settings
 - media paths
-- local divisions, titles, people, and replacements
+- local divisions, titles, people, entities, and replacements
 - model settings
 - LLM provider settings
 - provider security policy
@@ -30,6 +30,7 @@ YATSEE core is provider-neutral for source acquisition. It starts once compatibl
 - [Divisions](#divisions)
 - [Titles](#titles)
 - [People](#people)
+- [Entities](#entities)
 - [Replacements](#replacements)
 - [Validation and Resolution](#validation-and-resolution)
 - [LLM Provider Configuration and Security](#llm-provider-configuration-and-security)
@@ -66,7 +67,7 @@ yatsee.toml
 data/<entity>/config.toml
   entity-specific processing settings
   local media path settings
-  local people / titles / divisions
+  local people / titles / divisions / entities
   replacement rules
   notes and local metadata
 ```
@@ -111,7 +112,7 @@ yatsee audio transcribe
 yatsee transcript slice
 yatsee transcript normalize
 
-yatsee intel run
+yatsee intel summarize
 yatsee intel signals
 ```
 
@@ -204,6 +205,7 @@ Then refine:
 [divisions]
 [titles]
 [people]
+[entities]
 [replacements]
 ```
 
@@ -240,7 +242,7 @@ yatsee audio format -e example_county_board
 yatsee audio transcribe -e example_county_board --faster
 yatsee transcript slice -e example_county_board --force
 yatsee transcript normalize -e example_county_board --force
-yatsee intel run -e example_county_board
+yatsee intel summarize -e example_county_board
 yatsee intel signals -e example_county_board
 ```
 
@@ -280,9 +282,12 @@ default_embedding_model = "all-MiniLM-L6-v2"
 llm_provider = "ollama"
 llm_provider_url = "http://localhost:11434"
 llm_api_key = ""
+# Prefer env-based secrets for hosted providers.
+# llm_api_key_env = "OPENAI_API_KEY"
 
 llm_allow_remote = false
 llm_allow_insecure_http = false
+llm_allow_loopback_http = true
 llm_allow_custom_executable = false
 
 show_pricing = false
@@ -443,7 +448,7 @@ Start empty if you do not know the divisions yet.
 
 # Titles
 
-`[titles]` defines recurring role/title fragments.
+`[titles]` defines recurring role/title fragments. Use it for civic roles, offices, and staff titles that help prompts understand the local meeting context.
 
 ```toml
 [titles]
@@ -451,16 +456,17 @@ board = ["County Board", "Board Member", "Chair", "Vice Chair"]
 county_clerk = ["County Clerk", "Clerk"]
 administration = ["County Administrator", "County Manager"]
 staff = ["Director", "Coordinator", "Treasurer", "Sheriff", "State's Attorney", "Engineer", "Assessor"]
-third_parties = ["Consultant", "Engineer", "Auditor", "Applicant"]
 ```
 
-Use `[people]` for names.
+Use `[people]` for names and `[entities]` for contractors, organizations, places, vendors, and other non-person terms.
+
+Operational note: transcription hotwords should come from people aliases and entity terms, not from generic title buckets. Broad title words such as `Mayor`, `Clerk`, `Alderman`, `Director`, or `Chief` can over-bias weak audio spans.
 
 ---
 
 # People
 
-`[people]` groups recurring people by role.
+`[people]` groups recurring people by role. These aliases are high-value transcription and normalization context.
 
 ```toml
 [people.board_members]
@@ -468,15 +474,35 @@ Jane_Doe = ["Jane", "Doe"]
 Sam_Smith = ["Sam", "Smith", "Samuel"]
 
 [people.staff]
-County_Clerk = ["Clerk", "County Clerk"]
+County_Clerk = ["Dovie", "Anderson"]
+
+[people.legacy]
+Former_Member = ["Former", "Member"]
 ```
+
+Use `[people.legacy]` for former officials, former staff, or recurring historical names that may appear in older recordings but should not be represented as current officeholders.
 
 Guidelines:
 
 - use underscores in identifiers
 - include first names, last names, nicknames, and common variants
-- avoid long phrases unless they solve recurring transcription problems
+- avoid title-heavy aliases such as `Mayor Jane Doe` unless they solve a proven recurring problem
 - keep the list useful, not exhaustive
+
+---
+
+# Entities
+
+`[entities]` groups non-person terms that should remain available as local context, such as contractors, organizations, agencies, vendors, recurring places, project names, or local institutions.
+
+```toml
+[entities]
+third_parties = ["Fehr Graham", "Example Engineering"]
+organizations = ["ComEd", "Example Library"]
+places = ["Hancock Bridge", "Shawnee Street"]
+```
+
+Use `[entities]` instead of `[titles]` for contractors, companies, organizations, places, and other local terms that are not people or role titles.
 
 ---
 
@@ -535,7 +561,7 @@ yatsee config entity purge \
   --entity example_county_board
 ```
 
-Use purge carefully. It removes both the registry entry and local filesystem data.
+Use purge carefully. It removes both the registry entry and local filesystem data. Entity handles and purge paths are validated before deletion so a malformed handle or path traversal cannot escape the configured root data directory.
 
 ---
 
@@ -550,9 +576,12 @@ LLM provider config lives in `[system]`.
 llm_provider = "ollama"
 llm_provider_url = "http://localhost:11434"
 llm_api_key = ""
+# Prefer env-based secrets for hosted providers.
+# llm_api_key_env = "OPENAI_API_KEY"
 
 llm_allow_remote = false
 llm_allow_insecure_http = false
+llm_allow_loopback_http = true
 llm_allow_custom_executable = false
 ```
 
@@ -568,9 +597,19 @@ codex_cli
 
 Provider hardening defaults:
 
-- non-local local-runtime targets are blocked unless explicitly allowed
-- insecure hosted HTTP is blocked unless explicitly allowed
-- custom executable targets are blocked unless explicitly allowed
+- loopback HTTP is allowed only through `llm_allow_loopback_http`
+- off-box provider targets require `llm_allow_remote=true`
+- non-loopback plain HTTP additionally requires `llm_allow_insecure_http=true`
+- custom executable targets require `llm_allow_custom_executable=true`
+
+Common provider postures:
+
+| Use case | Provider URL | Required flags |
+|---|---|---|
+| Local Ollama | `http://localhost:11434` | `llm_allow_loopback_http=true` |
+| LAN Ollama | `http://192.168.x.x:11434` | `llm_allow_remote=true`, `llm_allow_insecure_http=true` |
+| Hosted API | `https://...` | `llm_allow_remote=true` |
+| CLI-backed provider | `codex` | default executable allowed; custom executable requires `llm_allow_custom_executable=true` |
 
 ---
 
@@ -605,20 +644,24 @@ num_ctx = 16384
 
 # Prompt Profiles
 
-Prompt profiles live outside the main config and are selected during intelligence runs.
+Prompt profiles live outside the main config and are selected during intelligence runs. Profiles should use the shared profile/routing mechanism rather than one-off processing paths.
 
 ```bash
-yatsee intel run \
+yatsee intel summarize \
   -e example_entity \
   --job-profile civic
 ```
 
-Common profiles:
+Validate prompt/profile wiring with:
 
-```text
-civic
-research
+```bash
+yatsee intel prompts validate
+yatsee intel prompts validate --entity example_entity
+yatsee intel prompts validate --profile civic
+yatsee intel prompts validate --all
 ```
+
+Use `--all` when you intentionally want to surface every discovered profile, including unfinished or broken bundles.
 
 ---
 
@@ -637,6 +680,7 @@ High-value refinements:
 [divisions]
 [titles]
 [people]
+[entities]
 [replacements]
 ```
 
@@ -711,13 +755,15 @@ board = ["County Board", "Board Member", "Chair", "Vice Chair"]
 county_clerk = ["County Clerk", "Clerk"]
 administration = ["County Administrator", "County Manager"]
 staff = ["Director", "Coordinator", "Treasurer", "Sheriff", "State's Attorney", "Engineer", "Assessor"]
-third_parties = ["Consultant", "Engineer", "Auditor", "Applicant"]
 
 [people.board_members]
 
 [people.staff]
 
-[people.third_parties]
+[people.legacy]
+
+[entities]
+third_parties = ["Consultant", "Engineer", "Auditor", "Applicant"]
 
 [replacements]
 "Common Bad Transcription" = "Correct Local Term"
@@ -732,7 +778,7 @@ yatsee audio format -e example_county_board
 yatsee audio transcribe -e example_county_board --faster
 yatsee transcript slice -e example_county_board --force
 yatsee transcript normalize -e example_county_board --force
-yatsee intel run -e example_county_board
+yatsee intel summarize -e example_county_board
 yatsee intel signals -e example_county_board
 ```
 
@@ -757,7 +803,7 @@ The highest-value work is:
 - place raw media in the configured input directory
 - validate before long runs
 - keep local provider security defaults intact
-- add real local names and roles over time
+- add real local names, legacy people, entities, and roles over time
 - add replacements for recurring transcript errors
 - confirm transcript quality before relying on summaries
 

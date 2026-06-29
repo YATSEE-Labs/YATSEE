@@ -5,14 +5,31 @@ YATSEE is a modular, local-first pipeline for processing long-form meeting media
 The current system is organized around three broad layers:
 
 ```text
-acquire
+supply media
   ↓
-format → transcribe → slice → normalize → summarize / extract signals
+format → transcribe → optional QA → slice → normalize → summarize / extract signals
   ↓
 index → search / investigate
 ```
 
-YATSEE core owns the middle processing layer. Acquisition and downstream search can be handled by adjacent tools or scripts.
+YATSEE core owns the middle processing layer. Acquisition, hosted upload handling, publication, and downstream search can be handled by adjacent tools or applications that hand off local files or explicit artifact references.
+
+
+## Current Operating Scope
+
+The supported local workflow is staged media processing: raw media is supplied locally, processed through staged audio/transcript/intelligence commands, and written back as inspectable filesystem artifacts.
+
+Current first-class intelligence commands are:
+
+```bash
+yatsee intel summarize -e <entity>
+yatsee intel signals -e <entity>
+yatsee intel prompts validate
+```
+
+`yatsee intel run` remains a compatibility alias for `yatsee intel summarize`. Intelligence workflows are profile-driven; additional profiles should extend the shared profile/routing mechanism rather than creating one-off processing paths.
+
+---
 
 ## Process Flow
 
@@ -26,6 +43,8 @@ downloads/
 audio/
   ↓
 transcripts_<model>/
+  ↓
+optional transcript QA
   ↓
 normalized/
   ↓
@@ -167,6 +186,33 @@ VTT is the primary transcript artifact because it preserves timing.
 
 ---
 
+## Optional Transcript QA
+
+Experimental helper scripts can inspect VTT outputs before they are sliced, normalized, summarized, or indexed. This is useful for long batch runs where ASR loops or timestamp artifacts can otherwise propagate into downstream artifacts.
+
+This is a separate recovery workflow, not part of the normal happy-path command sequence.
+
+Current helpers:
+
+```bash
+python scripts/qa_transcript_report.py --details
+python scripts/qa_transcript_report.py --json qa_report.json
+python scripts/qa_reset_vtt_for_rebuild.py --entity <entity> --qa-report qa_report.json
+```
+
+If the reset helper selects transcripts for rebuild, rerun transcription with the standard defaults:
+
+```bash
+yatsee audio transcribe \
+  -e <entity> \
+  --faster \
+  --get-chunks
+```
+
+The QA boundary is intentionally strict: ASR loop/content corruption findings are rebuild signals, not fixer targets. Timestamp-only issues may be reported or later repaired by conservative QA fix tooling.
+
+---
+
 ## 4. Transcript Preparation
 
 ### 4a. Slice VTT into TXT and JSONL Segments
@@ -189,7 +235,7 @@ Normalized text is the preferred input for summarization, signal extraction, and
 
 ## 5. Intelligence and Summarization
 
-- **Command:** `yatsee intel run`
+- **Command:** `yatsee intel summarize`
 - **Input:** normalized `.txt`
 - **Output:** `.md` or `.yaml` summaries in `summary_<model>/` or a configured output directory
 - **Tooling:** provider-based LLM execution
@@ -205,6 +251,16 @@ openai
 anthropic
 codex_cli
 ```
+
+Provider trust boundaries are enforced before model execution:
+
+| Target type | Required setting | Notes |
+|---|---|---|
+| Loopback HTTP, such as `http://localhost:11434` | `llm_allow_loopback_http=true` | Intended for local Ollama/llama.cpp. |
+| Remote HTTPS | `llm_allow_remote=true` | Intended for hosted APIs or explicitly trusted remote services. |
+| Remote/LAN HTTP | `llm_allow_remote=true` and `llm_allow_insecure_http=true` | Use only for trusted LAN/VPN-style model servers. |
+| Custom CLI executable | `llm_allow_custom_executable=true` | Applies to CLI-backed providers such as `codex_cli`. |
+
 
 ---
 
@@ -235,13 +291,13 @@ low-confidence lines
 
 ### Index Data
 
-- **Current script/prototype:** `yatsee_index_data.py`
+- **Current script/prototype:** `examples/yatsee_index_data.py`
 - **Input:** normalized transcript text, summaries, and optional segment artifacts
 - **Output:** vector database files, often under `yatsee_db/`
 
 ### Search / Investigation
 
-- **Current script/prototype:** `yatsee_search_demo.py`
+- **Current script/prototype:** `examples/yatsee_search_demo.py`
 - **Input:** normalized text, summaries, and indexed retrieval artifacts
 - **Tooling:** Streamlit plus ChromaDB-backed retrieval
 
@@ -256,7 +312,7 @@ yatsee audio format -e <entity>
 yatsee audio transcribe -e <entity>
 yatsee transcript slice -e <entity>
 yatsee transcript normalize -e <entity>
-yatsee intel run -e <entity>
+yatsee intel summarize -e <entity>
 yatsee intel signals -e <entity>
 ```
 
@@ -269,7 +325,7 @@ Command summary:
 | `yatsee audio transcribe -e <entity>` | Transcribe audio files to VTT. |
 | `yatsee transcript slice -e <entity>` | Slice VTT into transcript text and structured segments. |
 | `yatsee transcript normalize -e <entity>` | Clean and normalize transcript text. |
-| `yatsee intel run -e <entity>` | Generate summaries through the configured provider. |
+| `yatsee intel summarize -e <entity>` | Generate summaries through the configured provider. |
 | `yatsee intel signals -e <entity>` | Generate deterministic meeting signal artifacts. |
 
 ---

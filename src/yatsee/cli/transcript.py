@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import argparse
 
-from yatsee.transcript.normalize import run_normalize_stage
-from yatsee.transcript.slice import run_slice_stage
 
 
 def register_transcript_commands(subparsers: argparse._SubParsersAction) -> None:
@@ -62,6 +60,8 @@ def handle_transcript_slice(args: argparse.Namespace) -> int:
     :param args: Parsed CLI arguments
     :return: Process exit code
     """
+    from yatsee.transcript.slice import run_slice_stage
+
     result = run_slice_stage(
         global_config_path=args.config,
         entity=args.entity,
@@ -95,6 +95,8 @@ def handle_transcript_normalize(args: argparse.Namespace) -> int:
     :param args: Parsed CLI arguments
     :return: Process exit code
     """
+    from yatsee.transcript.normalize import run_normalize_stage
+
     result = run_normalize_stage(
         global_config_path=args.config,
         entity=args.entity,

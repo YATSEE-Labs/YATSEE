@@ -81,6 +81,11 @@ def register_config_commands(subparsers: argparse._SubParsersAction) -> None:
 
     resolve_parser = config_subparsers.add_parser("resolve", help="Print resolved runtime config")
     resolve_parser.add_argument("-e", "--entity", help="Resolve a specific entity")
+    resolve_parser.add_argument(
+        "--show-secrets",
+        action="store_true",
+        help="Print sensitive config values instead of redacting them",
+    )
     resolve_parser.set_defaults(handler=handle_config_resolve)
 
 
@@ -206,6 +211,10 @@ def handle_config_resolve(args: argparse.Namespace) -> int:
     :param args: Parsed CLI arguments
     :return: Process exit code
     """
-    resolved = resolve_config(global_config_path=args.config, entity=args.entity)
+    resolved = resolve_config(
+        global_config_path=args.config,
+        entity=args.entity,
+        redact=not args.show_secrets,
+    )
     print(json.dumps(resolved, indent=2, sort_keys=True))
     return 0

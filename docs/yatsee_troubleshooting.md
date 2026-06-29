@@ -22,7 +22,9 @@ yatsee config --help
 yatsee audio --help
 yatsee transcript --help
 yatsee intel --help
+yatsee intel summarize --help
 yatsee intel signals --help
+yatsee intel prompts validate
 ```
 
 Compile package files:
@@ -253,7 +255,7 @@ yatsee transcript normalize \
 
 ## LLM provider is unavailable
 
-If `yatsee intel run` fails with a connection error, timeout, or empty response:
+If `yatsee intel summarize` fails with a connection error, timeout, or empty response:
 
 - confirm `llm_provider`
 - confirm `llm_provider_url`
@@ -272,7 +274,7 @@ Examples:
 
 If OpenAI or Anthropic requests fail immediately:
 
-- confirm `llm_api_key`
+- confirm `llm_api_key_env` or `YATSEE_LLM_API_KEY`; avoid putting hosted API keys in shell history
 - confirm the key is valid
 - confirm the selected provider matches the supplied key
 - confirm model access
@@ -291,13 +293,16 @@ If a provider target looks valid but YATSEE rejects it before execution, review:
 ```text
 llm_allow_remote
 llm_allow_insecure_http
+llm_allow_loopback_http
 llm_allow_custom_executable
 ```
 
 Typical cases:
 
-- remote Ollama or llama.cpp target blocked because `llm_allow_remote = false`
-- hosted provider blocked because URL uses `http://`
+- local Ollama or llama.cpp target blocked because `llm_allow_loopback_http = false`
+- LAN Ollama or llama.cpp target blocked because `llm_allow_remote = false`
+- LAN/plain-HTTP provider blocked because `llm_allow_insecure_http = false`
+- hosted HTTPS provider blocked because `llm_allow_remote = false`
 - custom `codex_cli` executable blocked because `llm_allow_custom_executable = false`
 
 ## Local model runtime is unavailable
@@ -353,7 +358,9 @@ Check:
 
 ```bash
 yatsee intel --help
+yatsee intel summarize --help
 yatsee intel signals --help
+yatsee intel prompts validate
 ```
 
 If missing, confirm the CLI split files are installed from the active checkout:
@@ -398,16 +405,74 @@ Signals are not a replacement for summaries or minutes.
 
 ---
 
+## Prompt bundle validation fails
+
+Run:
+
+```bash
+yatsee intel prompts validate
+yatsee intel prompts validate --entity <entity>
+```
+
+This validates prompt/profile wiring only. It does not judge prompt wording, output quality, or whether a profile is mature enough for production use.
+
+---
+
 # Transcript Quality Issues
 
-If downstream summaries are weak because transcript quality is poor:
+If downstream summaries are weak because transcript quality is poor, check transcript artifacts before tuning prompts or models. Bad VTTs will flow into slicing, normalization, summaries, signals, and search.
 
-- confirm audio quality
-- confirm transcription model choice
-- confirm language setting
-- review chunking behavior
-- add `[replacements]` for recurring ASR failures
-- confirm entity-specific names, titles, and people lists are current
+First run the experimental transcript QA report helper:
+
+```bash
+python scripts/qa_transcript_report.py --details
+python scripts/qa_transcript_report.py --json qa_report.json
+```
+
+The QA report uses ASR loop findings as the main rebuild signal. Files marked `rerun` or `block` should be retranscribed rather than edited by a fixer.
+
+To reset bad VTT files and matching hash-tracker entries for rebuild, use the reset helper in dry-run mode first:
+
+```bash
+python scripts/qa_reset_vtt_for_rebuild.py \
+  --entity <entity> \
+  --qa-report qa_report.json
+```
+
+Apply only after reviewing the matched files and tracker updates:
+
+```bash
+python scripts/qa_reset_vtt_for_rebuild.py \
+  --entity <entity> \
+  --qa-report qa_report.json \
+  --apply
+
+yatsee audio transcribe \
+  -e <entity> \
+  --faster \
+  --get-chunks
+```
+
+The default transcription profile is the QA-safe baseline. Use QA-selected rebuilds only for transcripts that were reset after review.
+
+QA action boundaries:
+
+| Issue type | Action | Notes |
+|---|---|---|
+| ASR loop / repeated hallucinated text | rebuild | Do not repair content loops in a fixer. |
+| Impossible cue duration | fix/report | Timestamp-only repair may be safe when implemented conservatively. |
+| Cue overlap / non-monotonic timestamp | fix/report | Safe repair should not change transcript text. |
+| Long low-information cue | report | Usually inspect only; not a direct rebuild trigger by itself. |
+| High 30-second cue count | report | Supporting signal, not enough by itself to rebuild. |
+
+Also check:
+
+- audio quality
+- transcription model choice
+- language setting
+- chunking behavior
+- `[people]`, `[people.legacy]`, and `[entities]` context
+- `[replacements]` for recurring ASR failures
 
 Check normalized text before tuning prompts:
 
@@ -426,7 +491,7 @@ yatsee audio format -e <entity>
 yatsee audio transcribe -e <entity>
 yatsee transcript slice -e <entity>
 yatsee transcript normalize -e <entity>
-yatsee intel run -e <entity>
+yatsee intel summarize -e <entity>
 yatsee intel signals -e <entity>
 ```
 
@@ -437,13 +502,13 @@ Point a stage at a single known file to separate content issues from batch-proce
 ## Print prompts without running inference
 
 ```bash
-yatsee intel run -e <entity> --print-prompts
+yatsee intel summarize -e <entity> --print-prompts
 ```
 
 ## Write chunk outputs for inspection
 
 ```bash
-yatsee intel run -e <entity> --enable-chunk-writer
+yatsee intel summarize -e <entity> --enable-chunk-writer
 ```
 
 This helps determine whether the issue begins at:
@@ -456,12 +521,12 @@ This helps determine whether the issue begins at:
 ## Override provider settings for one run
 
 ```bash
-yatsee intel run \
+yatsee intel summarize \
   -e <entity> \
   --llm-provider ollama \
   --llm-provider-url http://localhost:11434
 
-yatsee intel run \
+yatsee intel summarize \
   -e <entity> \
   --llm-provider llamacpp \
   --llm-provider-url http://localhost:8080
@@ -491,6 +556,7 @@ llm_provider
 llm_provider_url
 llm_allow_remote
 llm_allow_insecure_http
+llm_allow_loopback_http
 llm_allow_custom_executable
 ```
 

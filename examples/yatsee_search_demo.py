@@ -42,7 +42,7 @@ if entity is None:
         "❌ No entity specified.\n"
         "This application requires an explicit entity to be defined.\n\n"
         "Usage:\n"
-        "  streamlit run yatsee_search_demo.py -- -e your_entity_name"
+        "  streamlit run examples/yatsee_search_demo.py -- -e your_entity_name"
     )
     print(err_msg, file=sys.stderr)  # CLI visibility
     st.error(err_msg)                # Streamlit UI

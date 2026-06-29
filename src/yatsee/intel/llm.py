@@ -22,6 +22,7 @@ def llm_generate_text(
     max_output_tokens: int | None = None,
     allow_remote: bool = False,
     allow_insecure_http: bool = False,
+    allow_loopback_http: bool = True,
     allow_custom_executable: bool = False,
 ) -> str:
     """
@@ -40,7 +41,8 @@ def llm_generate_text(
     :param num_ctx: Requested context window
     :param max_output_tokens: Optional explicit output token cap
     :param allow_remote: Whether remote non-local targets are allowed for local HTTP providers
-    :param allow_insecure_http: Whether plain HTTP is allowed for hosted providers
+    :param allow_insecure_http: Whether non-loopback plain HTTP provider targets are allowed
+    :param allow_loopback_http: Whether loopback plain HTTP provider targets are allowed
     :param allow_custom_executable: Whether custom CLI executable targets are allowed
     :return: Generated text
     :raises ValueError: If the prompt is empty
@@ -56,6 +58,7 @@ def llm_generate_text(
         target=llm_provider_url,
         allow_remote=allow_remote,
         allow_insecure_http=allow_insecure_http,
+        allow_loopback_http=allow_loopback_http,
         allow_custom_executable=allow_custom_executable,
     )
 
