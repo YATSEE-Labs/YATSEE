@@ -16,13 +16,12 @@ of on-disk artifacts when requested.
 from __future__ import annotations
 
 import os
-import re
 import shutil
 from typing import Any, Dict, List
 
 from yatsee.core.config import remove_entity_registry_entry, upsert_entity_registry_entry
 from yatsee.core.errors import ConfigError, EntityNotFoundError, ValidationError
-from yatsee.core.paths import get_entity_dir, get_root_data_dir
+from yatsee.core.paths import get_entity_dir, get_root_data_dir, validate_entity_handle
 
 
 def list_entities(global_cfg: Dict[str, Any]) -> List[str]:
@@ -33,27 +32,6 @@ def list_entities(global_cfg: Dict[str, Any]) -> List[str]:
     :return: Sorted list of entity handles
     """
     return sorted(global_cfg.get("entities", {}).keys())
-
-
-def validate_entity_handle(entity: str) -> str:
-    """
-    Validate an entity handle against the project's current naming rules.
-
-    Allowed characters:
-    - lowercase letters
-    - numbers
-    - underscores
-
-    :param entity: Proposed entity handle
-    :return: Normalized entity handle
-    :raises ValidationError: If the handle is invalid
-    """
-    entity = entity.strip()
-    if not re.fullmatch(r"[a-z0-9_]+", entity):
-        raise ValidationError(
-            "Invalid entity handle. Only lowercase letters, numbers, and underscores are allowed."
-        )
-    return entity
 
 
 def ensure_root_data_dir(global_cfg: Dict[str, Any]) -> str:
@@ -81,12 +59,50 @@ def create_entity_directory(global_cfg: Dict[str, Any], entity: str) -> str:
     :return: Path to the entity directory
     :raises ConfigError: If directory creation fails
     """
+    entity = validate_entity_handle(entity)
     ensure_root_data_dir(global_cfg)
     entity_dir = get_entity_dir(global_cfg, entity)
     try:
         os.makedirs(entity_dir, exist_ok=True)
     except OSError as exc:
         raise ConfigError(f"Failed to create entity directory '{entity_dir}': {exc}") from exc
+    return entity_dir
+
+
+def validate_entity_purge_target(global_cfg: Dict[str, Any], entity: str) -> str:
+    """
+    Validate the filesystem target for an entity purge operation.
+
+    The resolved directory must be a direct YATSEE entity path under the root
+    data directory and must not point at the root itself. If the directory is
+    non-empty, it must contain a local ``config.toml`` marker so a malformed
+    registry entry cannot delete an arbitrary populated directory.
+
+    :param global_cfg: Global configuration dictionary
+    :param entity: Entity handle
+    :return: Validated entity directory path
+    :raises ValidationError: If the purge target is unsafe
+    """
+    entity = validate_entity_handle(entity)
+    root_dir = os.path.abspath(get_root_data_dir(global_cfg))
+    entity_dir = os.path.abspath(get_entity_dir(global_cfg, entity))
+
+    if entity_dir == root_dir:
+        raise ValidationError("Refusing to purge the root data directory.")
+
+    if not os.path.exists(entity_dir):
+        return entity_dir
+
+    if not os.path.isdir(entity_dir):
+        raise ValidationError(f"Entity purge target is not a directory: {entity_dir}")
+
+    entries = os.listdir(entity_dir)
+    marker_path = os.path.join(entity_dir, "config.toml")
+    if entries and not os.path.isfile(marker_path):
+        raise ValidationError(
+            f"Refusing to purge non-empty entity directory without config.toml marker: {entity_dir}"
+        )
+
     return entity_dir
 
 
@@ -98,8 +114,9 @@ def remove_entity_directory(global_cfg: Dict[str, Any], entity: str) -> str:
     :param entity: Entity handle
     :return: Removed path
     :raises ConfigError: If deletion fails
+    :raises ValidationError: If the deletion target is unsafe
     """
-    entity_dir = get_entity_dir(global_cfg, entity)
+    entity_dir = validate_entity_purge_target(global_cfg, entity)
     try:
         if os.path.isdir(entity_dir):
             shutil.rmtree(entity_dir)
@@ -118,6 +135,7 @@ def inspect_entity_storage(global_cfg: Dict[str, Any], entity: str) -> Dict[str,
     :param entity: Entity handle
     :return: Dictionary describing directory existence and basic contents
     """
+    entity = validate_entity_handle(entity)
     entity_dir = get_entity_dir(global_cfg, entity)
     exists = os.path.isdir(entity_dir)
 
@@ -218,6 +236,7 @@ def remove_entity(global_cfg: Dict[str, Any], config_path: str, entity: str) -> 
     :return: Summary of actions performed
     :raises EntityNotFoundError: If the entity does not exist
     """
+    entity = validate_entity_handle(entity)
     entities = global_cfg.get("entities", {})
     if entity not in entities:
         raise EntityNotFoundError(f"Entity '{entity}' does not exist.")
@@ -251,11 +270,15 @@ def purge_entity(
     :return: Summary of actions performed or that would be performed
     :raises EntityNotFoundError: If the entity does not exist
     """
+    entity = validate_entity_handle(entity)
     entities = global_cfg.get("entities", {})
     if entity not in entities:
         raise EntityNotFoundError(f"Entity '{entity}' does not exist.")
 
     storage = inspect_entity_storage(global_cfg, entity)
+
+    if not dry_run:
+        validate_entity_purge_target(global_cfg, entity)
 
     if dry_run:
         return {

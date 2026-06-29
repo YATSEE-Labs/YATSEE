@@ -4,9 +4,10 @@ Common types and errors for YATSEE text-generation providers.
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
-import requests
+if TYPE_CHECKING:
+    import requests
 
 
 class ProviderError(RuntimeError):
@@ -46,7 +47,7 @@ class TextGenerationProvider(Protocol):
     def generate_text(
         self,
         *,
-        session: requests.Session,
+        session: "requests.Session",
         base_url: str,
         model: str,
         prompt: str,
