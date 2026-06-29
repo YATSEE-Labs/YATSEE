@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import argparse
 
-from yatsee.audio.format import run_format_stage
-from yatsee.audio.transcribe import run_transcribe_stage
 
 
 def register_audio_commands(subparsers: argparse._SubParsersAction) -> None:
@@ -45,6 +43,15 @@ def register_audio_commands(subparsers: argparse._SubParsersAction) -> None:
     transcribe_parser.add_argument("-g", "--get-chunks", action="store_true", help="Transcribe using audio chunk files")
     transcribe_parser.add_argument("-m", "--model", help="Whisper model size override")
     transcribe_parser.add_argument("--faster", action="store_true", help="Use faster-whisper if installed")
+    transcribe_parser.add_argument(
+        "--transcription-profile",
+        default="default",
+        choices=["default", "qa_cleanup"],
+        help=(
+            "Transcription behavior preset. Use qa_cleanup when rebuilding "
+            "transcripts flagged by QA for ASR loop artifacts."
+        ),
+    )
     transcribe_parser.add_argument("-l", "--lang", default="en", help="Language code or 'auto'")
     transcribe_parser.add_argument(
         "-d",
@@ -65,6 +72,8 @@ def handle_audio_format(args: argparse.Namespace) -> int:
     :param args: Parsed CLI arguments
     :return: Process exit code
     """
+    from yatsee.audio.format import run_format_stage
+
     result = run_format_stage(
         global_config_path=args.config,
         entity=args.entity,
@@ -98,6 +107,8 @@ def handle_audio_transcribe(args: argparse.Namespace) -> int:
     :param args: Parsed CLI arguments
     :return: Process exit code
     """
+    from yatsee.audio.transcribe import run_transcribe_stage
+
     result = run_transcribe_stage(
         global_config_path=args.config,
         entity=args.entity,
@@ -110,6 +121,7 @@ def handle_audio_transcribe(args: argparse.Namespace) -> int:
         device_arg=args.device,
         verbose=args.verbose,
         quiet=args.quiet,
+        transcription_profile=args.transcription_profile,
     )
 
     print(f"Audio input: {result['audio_input']}")
@@ -117,6 +129,7 @@ def handle_audio_transcribe(args: argparse.Namespace) -> int:
     print(f"Model: {result['model']}")
     print(f"Backend: {result['backend']}")
     print(f"Device: {result['device']}")
+    print(f"Transcription profile: {result.get('transcription_profile', args.transcription_profile)}")
     print(f"Discovered files: {result['discovered']}")
     print(f"Processed files: {result['processed']}")
     print(f"Skipped files: {result['skipped']}")

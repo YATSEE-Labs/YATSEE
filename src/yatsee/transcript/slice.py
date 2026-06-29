@@ -14,55 +14,20 @@ Behavior intentionally mirrors the current standalone script:
 
 from __future__ import annotations
 
-import gc
-import hashlib
 import json
 import os
-import random
 import re
-import string
 from typing import Any, Dict, List, Optional
 
-import torch
 import webvtt
-from sentence_transformers import SentenceTransformer
 
 from yatsee.core.config import load_entity_config, load_global_config
 from yatsee.core.discovery import discover_files
-from yatsee.core.errors import ConfigError, ValidationError
+from yatsee.core.errors import ValidationError
+from yatsee.core.runtime import clear_torch_cache, resolve_torch_device
+from yatsee.core.source_ids import resolve_source_id, load_source_id_map
 
 SUPPORTED_INPUT_EXTENSIONS = (".vtt",)
-
-
-def clear_gpu_cache() -> None:
-    """
-    Clear PyTorch GPU cache and trigger garbage collection.
-
-    This matters when embeddings are enabled and a GPU-backed
-    SentenceTransformer model is used.
-
-    :return: None
-    """
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        gc.collect()
-
-
-def resolve_device(device_arg: str) -> str:
-    """
-    Resolve runtime device for SentenceTransformer embedding generation.
-
-    :param device_arg: Requested device: auto, cuda, cpu, mps
-    :return: Resolved device name
-    """
-    if torch.cuda.is_available() and device_arg in ["auto", "cuda"]:
-        clear_gpu_cache()
-        return "cuda"
-
-    if torch.backends.mps.is_available() and device_arg in ["auto", "mps"]:
-        return "mps"
-
-    return "cpu"
 
 
 def parse_vtt_timestamp(value: str) -> float:
@@ -206,42 +171,6 @@ def consolidate_sentences(
     return segments
 
 
-def generate_placeholder_id(base_name: Optional[str] = None) -> str:
-    """
-    Generate a deterministic placeholder ID when no real source ID is available.
-
-    :param base_name: Optional seed string
-    :return: 11-character placeholder ID
-    """
-    if base_name:
-        digest = hashlib.sha256(base_name.encode("utf-8")).hexdigest()
-        return "".join(char for char in digest if char.isalnum())[:11]
-
-    return "".join(random.choices(string.ascii_letters + string.digits, k=11))
-
-
-def load_video_id_map(id_map_path: str) -> Dict[str, str]:
-    """
-    Load a mapping from lowercase filename prefixes to real source IDs.
-
-    This preserves the current YATSEE behavior of looking up real IDs from
-    the downloads/.downloaded tracker when possible.
-
-    :param id_map_path: Path to the .downloaded tracker file
-    :return: Dictionary mapping lowercase ID to canonical source ID
-    """
-    id_map: Dict[str, str] = {}
-
-    if os.path.exists(id_map_path):
-        with open(id_map_path, "r", encoding="utf-8") as handle:
-            for line in handle:
-                real_id = line.strip()
-                if real_id and len(real_id) == 11:
-                    id_map[real_id.lower()] = real_id
-
-    return id_map
-
-
 def write_jsonl(
     segments: List[Dict[str, Any]],
     jsonl_path: str,
@@ -326,10 +255,11 @@ def resolve_slice_paths(
         or global_cfg.get("system", {}).get("default_embedding_model", "BAAI/bge-small-en-v1.5")
     )
 
-    resolved_input = vtt_input or os.path.join(
-        data_path,
-        f"transcripts_{entity_cfg.get('transcription_model', global_cfg.get('system', {}).get('default_transcription_model', 'medium'))}",
+    transcription_model = entity_cfg.get(
+        "transcription_model",
+        global_cfg.get("system", {}).get("default_transcription_model", "medium"),
     )
+    resolved_input = vtt_input or os.path.join(data_path, f"transcripts_{transcription_model}")
     resolved_output = output_dir or resolved_input
 
     return {
@@ -393,16 +323,19 @@ def run_slice_stage(
 
     os.makedirs(output_directory, exist_ok=True)
 
-    embedder: Optional[SentenceTransformer] = None
-    device = resolve_device(device_arg)
+    embedder: Any | None = None
+    device = "none"
 
     if gen_embed:
+        from sentence_transformers import SentenceTransformer
+
+        device = resolve_torch_device(device_arg)
         embedder = SentenceTransformer(embedding_model, device=device)
 
     id_map_path = ""
     if entity_cfg.get("data_path"):
         id_map_path = os.path.join(entity_cfg["data_path"], "downloads", ".downloaded")
-    id_map = load_video_id_map(id_map_path)
+    id_map = load_source_id_map(id_map_path)
 
     txt_written = 0
     jsonl_written = 0
@@ -411,18 +344,18 @@ def run_slice_stage(
     for vtt_file in vtt_files:
         base_name = os.path.splitext(os.path.basename(vtt_file))[0]
 
-        match = re.match(r"([A-Za-z0-9_-]{11})", base_name)
-        video_id = id_map.get(match.group(1).lower()) if match else None
-        if not video_id:
-            video_id = generate_placeholder_id(base_name)
+        video_id, used_placeholder = resolve_source_id(base_name, id_map)
+        if used_placeholder:
             messages.append(f"Placeholder ID for {base_name}: {video_id}")
 
         try:
             cues = read_vtt(vtt_file)
-            if not cues:
-                raise ValueError("No cues found in VTT")
         except Exception as exc:
             messages.append(f"Failed to read VTT '{vtt_file}': {exc}")
+            continue
+
+        if not cues:
+            messages.append(f"Skipped no-cue VTT: {vtt_file}")
             continue
 
         txt_path = os.path.join(output_directory, f"{base_name}.txt")
@@ -462,7 +395,7 @@ def run_slice_stage(
                 messages.append(f"Skipped existing JSONL segments: {jsonl_path}")
 
     if gen_embed:
-        clear_gpu_cache()
+        clear_torch_cache()
 
     return {
         "vtt_input": vtt_input_path,
