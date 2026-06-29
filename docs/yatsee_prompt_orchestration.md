@@ -7,8 +7,10 @@ Instead of sending a full transcript to a model and hoping for a usable result, 
 Prompt orchestration applies to:
 
 ```bash
-yatsee intel run
+yatsee intel summarize
 ```
+
+`yatsee intel run` remains available as a compatibility alias.
 
 It does not apply to deterministic signal extraction:
 
@@ -41,19 +43,19 @@ This allows global defaults, job-level customization, and entity-specific overri
 
 ```text
 ./prompts/
-  └── research/
+  └── civic/
       └── prompts.toml
 
 ./data/
   └── defined_entity/
       └── prompts/
-          └── research/
+          └── civic/
               └── prompts.toml
 
 ./data/
   └── generic_entity/
       └── prompts/
-          └── research/
+          └── civic/
               # no file, falls back to global prompts
 ```
 
@@ -68,19 +70,14 @@ Behavior:
 
 ## 2. Job Profiles
 
-The intelligence stage is driven by the `--job-profile` argument.
+The intelligence stage is driven by the `--job-profile` argument. A profile defines the prompt bundle and routing used for a particular artifact workflow.
 
-Common profiles:
-
-```text
-civic
-research
-```
+Profiles are intentionally extensible. New artifact workflows should be added through profile directories and shared routing/validation mechanics rather than custom code paths.
 
 Example:
 
 ```bash
-yatsee intel run \
+yatsee intel summarize \
   -e example_entity \
   --job-profile civic
 ```
@@ -116,7 +113,7 @@ The selected meeting type is then used to resolve prompt routing.
 Disable auto-classification:
 
 ```bash
-yatsee intel run \
+yatsee intel summarize \
   -e example_entity \
   --disable-auto-classification
 ```
@@ -124,7 +121,7 @@ yatsee intel run \
 Manual prompt overrides:
 
 ```bash
-yatsee intel run \
+yatsee intel summarize \
   -e example_entity \
   --first-prompt <prompt_id> \
   --second-prompt <prompt_id> \
@@ -176,9 +173,9 @@ Exact sections depend on the selected prompt profile and meeting type.
 YATSEE supports multiple chunking styles.
 
 ```bash
-yatsee intel run -e example_entity --chunk-style word
-yatsee intel run -e example_entity --chunk-style sentence
-yatsee intel run -e example_entity --chunk-style density
+yatsee intel summarize -e example_entity --chunk-style word
+yatsee intel summarize -e example_entity --chunk-style sentence
+yatsee intel summarize -e example_entity --chunk-style density
 ```
 
 ### Word chunking
@@ -235,23 +232,42 @@ Provider hardening settings include:
 ```text
 llm_allow_remote
 llm_allow_insecure_http
+llm_allow_loopback_http
 llm_allow_custom_executable
 ```
 
 By default, YATSEE preserves local-first safety assumptions:
 
-- remote local-runtime targets are blocked unless allowed
-- insecure hosted HTTP is blocked unless allowed
-- custom executable targets are blocked unless allowed
+- loopback HTTP is controlled separately through `llm_allow_loopback_http`
+- off-box provider targets require `llm_allow_remote=true`
+- non-loopback plain HTTP additionally requires `llm_allow_insecure_http=true`
+- custom executable targets require `llm_allow_custom_executable=true`
 
 ---
 
-## 7. Prompt Inspection
+## 7. Prompt Validation
+
+Validate prompt/profile bundle wiring without running inference:
+
+```bash
+yatsee intel prompts validate
+yatsee intel prompts validate --entity example_entity
+yatsee intel prompts validate --profile civic
+yatsee intel prompts validate --all
+```
+
+Use `--all` when you intentionally want to surface every discovered profile, including unfinished or broken bundles.
+
+Validation checks that prompt TOML loads, required routes exist, and router entries reference existing prompt IDs. It does not judge prompt wording, output quality, or whether a profile is mature enough for production use.
+
+---
+
+## 8. Prompt Inspection
 
 Print resolved prompts without running inference:
 
 ```bash
-yatsee intel run \
+yatsee intel summarize \
   -e example_entity \
   --print-prompts
 ```
@@ -266,12 +282,12 @@ This is useful for verifying:
 
 ---
 
-## 8. Chunk Output Inspection
+## 9. Chunk Output Inspection
 
 Write intermediate chunk outputs:
 
 ```bash
-yatsee intel run \
+yatsee intel summarize \
   -e example_entity \
   --enable-chunk-writer
 ```
@@ -286,12 +302,12 @@ This helps isolate whether problems begin at:
 
 ---
 
-## 9. Prompt Orchestration vs Meeting Signals
+## 10. Prompt Orchestration vs Meeting Signals
 
-`yatsee intel run` is LLM-backed and uses prompt orchestration.
+`yatsee intel summarize` is LLM-backed and uses prompt orchestration.
 
 ```bash
-yatsee intel run -e example_entity
+yatsee intel summarize -e example_entity
 ```
 
 `yatsee intel signals` is deterministic and does not use prompt routing or LLM inference.
