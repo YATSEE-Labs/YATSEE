@@ -55,6 +55,47 @@ def extract_context_from_filename(filename: str, extra_note: str | None = None) 
     return context
 
 
+def resolve_llm_api_key(
+    *,
+    provider_name: str,
+    cli_api_key: str | None,
+    system_cfg: Dict[str, Any],
+) -> str | None:
+    """
+    Resolve an LLM API key without requiring secrets on the command line.
+
+    Precedence preserves explicit CLI/config behavior while allowing operators to
+    keep provider secrets in environment variables. ``llm_api_key_env`` can point
+    at provider-native names such as ``OPENAI_API_KEY`` or ``ANTHROPIC_API_KEY``.
+
+    :param provider_name: Configured provider identifier
+    :param cli_api_key: API key supplied directly on the CLI
+    :param system_cfg: Global [system] configuration mapping
+    :return: Resolved API key, if any
+    """
+    if cli_api_key is not None:
+        return cli_api_key
+
+    configured_env_name = str(system_cfg.get("llm_api_key_env", "")).strip()
+    if configured_env_name:
+        return os.environ.get(configured_env_name)
+
+    configured_key = system_cfg.get("llm_api_key")
+    if configured_key:
+        return str(configured_key)
+
+    provider_env_names = {
+        "anthropic": "ANTHROPIC_API_KEY",
+        "openai": "OPENAI_API_KEY",
+    }
+
+    for env_name in (provider_env_names.get(provider_name), "YATSEE_LLM_API_KEY"):
+        if env_name and os.environ.get(env_name):
+            return os.environ[env_name]
+
+    return None
+
+
 def run_intelligence_stage(args: Any) -> Dict[str, Any]:
     """
     Run the intelligence stage across one or more normalized transcript files.
@@ -92,14 +133,15 @@ def run_intelligence_stage(args: Any) -> Dict[str, Any]:
         args.llm_provider or system_cfg.get("llm_provider", "ollama")
     ).strip().lower()
     llm_provider_url = args.llm_provider_url or system_cfg.get("llm_provider_url")
-    llm_api_key = (
-        args.llm_api_key
-        if args.llm_api_key is not None
-        else system_cfg.get("llm_api_key")
+    llm_api_key = resolve_llm_api_key(
+        provider_name=llm_provider,
+        cli_api_key=args.llm_api_key,
+        system_cfg=system_cfg,
     )
 
     llm_allow_remote = bool(system_cfg.get("llm_allow_remote", False))
     llm_allow_insecure_http = bool(system_cfg.get("llm_allow_insecure_http", False))
+    llm_allow_loopback_http = bool(system_cfg.get("llm_allow_loopback_http", True))
     llm_allow_custom_executable = bool(
         system_cfg.get("llm_allow_custom_executable", False)
     )
@@ -154,6 +196,7 @@ def run_intelligence_stage(args: Any) -> Dict[str, Any]:
                 llm_api_key=llm_api_key,
                 llm_allow_remote=llm_allow_remote,
                 llm_allow_insecure_http=llm_allow_insecure_http,
+                llm_allow_loopback_http=llm_allow_loopback_http,
                 llm_allow_custom_executable=llm_allow_custom_executable,
                 model=resolved["model"],
                 num_ctx=resolved["num_ctx"],

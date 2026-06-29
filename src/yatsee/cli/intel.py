@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 
-from yatsee.intel.runner import run_intelligence_stage
 
 
 def register_intel_commands(subparsers: argparse._SubParsersAction) -> None:
@@ -25,66 +24,36 @@ def register_intel_commands(subparsers: argparse._SubParsersAction) -> None:
     intel_parser = subparsers.add_parser("intel", help="Intelligence-stage commands")
     intel_subparsers = intel_parser.add_subparsers(dest="intel_command")
 
-    intel_run_parser = intel_subparsers.add_parser("run", help="Run multi-pass transcript summarization")
-    intel_run_parser.add_argument("-e", "--entity", help="Entity handle to process")
-    intel_run_parser.add_argument("-i", "--txt-input", help="Path to a transcript file or directory (.txt)")
-    intel_run_parser.add_argument("-o", "--output-dir", help="Directory to save final summaries")
-    intel_run_parser.add_argument("-m", "--model", help="LLM model override")
-    intel_run_parser.add_argument(
-        "--llm-provider",
-        help="LLM provider override (e.g. ollama, llamacpp, openai, anthropic, codex_cli)",
+    summarize_parser = intel_subparsers.add_parser(
+        "summarize",
+        aliases=["run"],
+        help="Generate multi-pass transcript summaries",
     )
-    intel_run_parser.add_argument("--llm-provider-url", help="LLM provider URL or executable target override")
-    intel_run_parser.add_argument("--llm-api-key", help="LLM API key override")
-    intel_run_parser.add_argument("--show-pricing", action="store_true", help="Estimate reference pricing for the run")
-    intel_run_parser.add_argument(
-        "--no-show-pricing",
-        action="store_true",
-        help="Disable reference pricing even if enabled in config",
+    _add_summarize_arguments(summarize_parser)
+    summarize_parser.set_defaults(handler=handle_intel_run)
+
+    prompts_parser = intel_subparsers.add_parser("prompts", help="Prompt bundle utilities")
+    prompts_subparsers = prompts_parser.add_subparsers(dest="prompt_command")
+
+    prompt_validate_parser = prompts_subparsers.add_parser(
+        "validate",
+        help="Validate prompt/profile bundle wiring",
     )
-    intel_run_parser.add_argument("--pricing-provider", help="Reference provider for pricing (e.g. openai, anthropic)")
-    intel_run_parser.add_argument("--pricing-model", help="Reference model for pricing (e.g. gpt-5.4, claude-sonnet-4)")
-    intel_run_parser.add_argument(
-        "-f",
-        "--output-format",
-        choices=["markdown", "yaml"],
-        default="markdown",
-        help="Summary output format",
-    )
-    intel_run_parser.add_argument(
+    prompt_validate_parser.add_argument("-e", "--entity", help="Entity handle for entity-local prompt lookup")
+    prompt_validate_parser.add_argument(
         "-j",
         "--job-profile",
-        choices=["civic", "research"],
+        "--profile",
+        dest="job_profile",
         default="civic",
-        help="Prompt workflow family",
+        help="Prompt/profile name to validate",
     )
-    intel_run_parser.add_argument(
-        "-s",
-        "--chunk-style",
-        choices=["word", "sentence", "density"],
-        default="word",
-        help="Chunk boundary method",
-    )
-    intel_run_parser.add_argument("-w", "--max-words", type=int, help="Approximate word count threshold for chunking")
-    intel_run_parser.add_argument("-t", "--max-tokens", type=int, help="Approximate max tokens per chunk")
-    intel_run_parser.add_argument("-p", "--max-pass", type=int, default=3, help="Maximum summarization passes")
-    intel_run_parser.add_argument(
-        "-d",
-        "--disable-auto-classification",
+    prompt_validate_parser.add_argument(
+        "--all",
         action="store_true",
-        help="Disable automatic meeting classification",
+        help="Validate all discovered filesystem-backed prompt profiles",
     )
-    intel_run_parser.add_argument("--first-prompt", help="Prompt ID for first pass")
-    intel_run_parser.add_argument("--second-prompt", help="Prompt ID for multi-pass chunk summaries")
-    intel_run_parser.add_argument("--final-prompt", help="Prompt ID for final summary pass")
-    intel_run_parser.add_argument("--context", default="", help="Optional human-readable meeting context")
-    intel_run_parser.add_argument("--print-prompts", action="store_true", help="Print prompt templates and exit")
-    intel_run_parser.add_argument(
-        "--enable-chunk-writer",
-        action="store_true",
-        help="Write intermediate chunk summaries for debugging",
-    )
-    intel_run_parser.set_defaults(handler=handle_intel_run)
+    prompt_validate_parser.set_defaults(handler=handle_intel_prompts_validate)
 
     intel_signals_parser = intel_subparsers.add_parser(
         "signals",
@@ -97,6 +66,75 @@ def register_intel_commands(subparsers: argparse._SubParsersAction) -> None:
     intel_signals_parser.set_defaults(handler=handle_intel_signals)
 
 
+def _add_summarize_arguments(parser: argparse.ArgumentParser) -> None:
+    """
+    Register arguments shared by the summarize command and its run alias.
+
+    :param parser: Subparser to configure
+    :return: None
+    """
+    parser.add_argument("-e", "--entity", help="Entity handle to process")
+    parser.add_argument("-i", "--txt-input", help="Path to a transcript file or directory (.txt)")
+    parser.add_argument("-o", "--output-dir", help="Directory to save final summaries")
+    parser.add_argument("-m", "--model", help="LLM model override")
+    parser.add_argument(
+        "--llm-provider",
+        help="LLM provider override (e.g. ollama, llamacpp, openai, anthropic, codex_cli)",
+    )
+    parser.add_argument("--llm-provider-url", help="LLM provider URL or executable target override")
+    parser.add_argument(
+        "--llm-api-key",
+        help="LLM API key override; prefer llm_api_key_env or YATSEE_LLM_API_KEY",
+    )
+    parser.add_argument("--show-pricing", action="store_true", help="Estimate reference pricing for the run")
+    parser.add_argument(
+        "--no-show-pricing",
+        action="store_true",
+        help="Disable reference pricing even if enabled in config",
+    )
+    parser.add_argument("--pricing-provider", help="Reference provider for pricing (e.g. openai, anthropic)")
+    parser.add_argument("--pricing-model", help="Reference model for pricing (e.g. gpt-5.4, claude-sonnet-4)")
+    parser.add_argument(
+        "-f",
+        "--output-format",
+        choices=["markdown", "yaml"],
+        default="markdown",
+        help="Summary output format",
+    )
+    parser.add_argument(
+        "-j",
+        "--job-profile",
+        default="civic",
+        help="Prompt/profile name for intelligence routing",
+    )
+    parser.add_argument(
+        "-s",
+        "--chunk-style",
+        choices=["word", "sentence", "density"],
+        default="word",
+        help="Chunk boundary method",
+    )
+    parser.add_argument("-w", "--max-words", type=int, help="Approximate word count threshold for chunking")
+    parser.add_argument("-t", "--max-tokens", type=int, help="Approximate max tokens per chunk")
+    parser.add_argument("-p", "--max-pass", type=int, default=3, help="Maximum summarization passes")
+    parser.add_argument(
+        "-d",
+        "--disable-auto-classification",
+        action="store_true",
+        help="Disable automatic meeting classification",
+    )
+    parser.add_argument("--first-prompt", help="Prompt ID for first pass")
+    parser.add_argument("--second-prompt", help="Prompt ID for multi-pass chunk summaries")
+    parser.add_argument("--final-prompt", help="Prompt ID for final summary pass")
+    parser.add_argument("--context", default="", help="Optional human-readable meeting context")
+    parser.add_argument("--print-prompts", action="store_true", help="Print prompt templates and exit")
+    parser.add_argument(
+        "--enable-chunk-writer",
+        action="store_true",
+        help="Write intermediate chunk summaries for debugging",
+    )
+
+
 def handle_intel_run(args: argparse.Namespace) -> int:
     """
     Run the intelligence summarization stage.
@@ -104,6 +142,8 @@ def handle_intel_run(args: argparse.Namespace) -> int:
     :param args: Parsed CLI arguments
     :return: Process exit code
     """
+    from yatsee.intel.runner import run_intelligence_stage
+
     result = run_intelligence_stage(args)
 
     if result.get("mode") == "print_prompts":
@@ -155,6 +195,52 @@ def handle_intel_run(args: argparse.Namespace) -> int:
                     f"${estimated_cost:.4f}"
                 )
 
+    return 0
+
+
+def handle_intel_prompts_validate(args: argparse.Namespace) -> int:
+    """
+    Validate prompt/profile bundle wiring.
+
+    This validates loading and route references only. It does not evaluate prompt
+    wording, output quality, or whether a profile is mature enough for production use.
+
+    :param args: Parsed CLI arguments
+    :return: Process exit code
+    """
+    from yatsee.core.config import load_entity_config, load_global_config
+    from yatsee.intel.prompts import discover_prompt_profiles, load_prompt_bundle
+
+    entity_cfg = {}
+    if args.entity:
+        global_cfg = load_global_config(args.config)
+        entity_cfg = load_entity_config(global_cfg, args.entity)
+
+    if args.all:
+        profiles = discover_prompt_profiles(entity_cfg)
+        if not profiles:
+            print("No filesystem-backed prompt profiles discovered.")
+            return 1
+
+        for profile in profiles:
+            bundle = load_prompt_bundle(entity_cfg, profile, require_prompt_file=True)
+            print(f"Job profile: {profile}")
+            print(f"Prompt file: {bundle['path']}")
+            print(f"Prompts: {len(bundle['prompts'])}")
+            print(f"Routes: {len(bundle['prompt_router'])}")
+            print()
+
+        print(f"Prompt bundle validation passed for {len(profiles)} profile(s).")
+        return 0
+
+    bundle = load_prompt_bundle(entity_cfg, args.job_profile, require_prompt_file=True)
+
+    print(f"Job profile: {args.job_profile}")
+    print(f"Prompt file: {bundle['path']}")
+    print(f"Used fallback prompts: {bundle['fallback']}")
+    print(f"Prompts: {len(bundle['prompts'])}")
+    print(f"Routes: {len(bundle['prompt_router'])}")
+    print("Prompt bundle validation passed.")
     return 0
 
 

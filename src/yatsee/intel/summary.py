@@ -71,6 +71,7 @@ def summarize_one_transcript(
     llm_api_key: str | None,
     llm_allow_remote: bool,
     llm_allow_insecure_http: bool,
+    llm_allow_loopback_http: bool,
     llm_allow_custom_executable: bool,
     model: str,
     num_ctx: int,
@@ -100,7 +101,8 @@ def summarize_one_transcript(
     :param llm_provider_url: Provider base URL or CLI executable target
     :param llm_api_key: Optional provider API key
     :param llm_allow_remote: Whether remote non-local targets are allowed for local HTTP providers
-    :param llm_allow_insecure_http: Whether plain HTTP is allowed for hosted providers
+    :param llm_allow_insecure_http: Whether non-loopback plain HTTP provider targets are allowed
+    :param llm_allow_loopback_http: Whether loopback plain HTTP provider targets are allowed
     :param llm_allow_custom_executable: Whether custom CLI executable targets are allowed
     :param model: Model name used for generation
     :param num_ctx: Requested context window
@@ -141,6 +143,7 @@ def summarize_one_transcript(
             allowed_labels=set(classifier_types.get("allowed", [])),
             llm_allow_remote=llm_allow_remote,
             llm_allow_insecure_http=llm_allow_insecure_http,
+            llm_allow_loopback_http=llm_allow_loopback_http,
             llm_allow_custom_executable=llm_allow_custom_executable,
         )
 
@@ -209,6 +212,7 @@ def summarize_one_transcript(
                 num_ctx=num_ctx,
                 allow_remote=llm_allow_remote,
                 allow_insecure_http=llm_allow_insecure_http,
+                allow_loopback_http=llm_allow_loopback_http,
                 allow_custom_executable=llm_allow_custom_executable,
             )
             chunk_summaries.append(chunk_summary)
@@ -269,6 +273,7 @@ def summarize_one_transcript(
                 num_ctx=num_ctx,
                 allow_remote=llm_allow_remote,
                 allow_insecure_http=llm_allow_insecure_http,
+                allow_loopback_http=llm_allow_loopback_http,
                 allow_custom_executable=llm_allow_custom_executable,
             )
 
@@ -312,19 +317,17 @@ def summarize_one_transcript(
                 pricing["estimated_cost"],
             )
 
-    output_path = ""
-    if run_cfg["job_profile"] == "civic":
-        output_path = write_summary_file(
-            summary,
-            base_name,
-            output_dir,
-            run_cfg["output_format"],
-        )
-        logger.info(
-            "Final summary: %d tokens written to: %s",
-            estimate_token_count(summary),
-            output_path,
-        )
+    output_path = write_summary_file(
+        summary,
+        base_name,
+        output_dir,
+        run_cfg["output_format"],
+    )
+    logger.info(
+        "Final summary: %d tokens written to: %s",
+        estimate_token_count(summary),
+        output_path,
+    )
 
     return {
         "base_name": base_name,

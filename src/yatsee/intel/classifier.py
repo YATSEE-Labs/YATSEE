@@ -21,6 +21,7 @@ def classify_transcript(
     allowed_labels: set[str],
     llm_allow_remote: bool = False,
     llm_allow_insecure_http: bool = False,
+    llm_allow_loopback_http: bool = True,
     llm_allow_custom_executable: bool = False,
 ) -> str:
     """
@@ -39,7 +40,8 @@ def classify_transcript(
     :param num_ctx: Requested context window
     :param allowed_labels: Set of accepted classification labels
     :param llm_allow_remote: Whether remote non-local targets are allowed for local HTTP providers
-    :param llm_allow_insecure_http: Whether plain HTTP is allowed for hosted providers
+    :param llm_allow_insecure_http: Whether non-loopback plain HTTP provider targets are allowed
+    :param llm_allow_loopback_http: Whether loopback plain HTTP provider targets are allowed
     :param llm_allow_custom_executable: Whether custom CLI executable targets are allowed
     :return: Matched lowercase label or ``general`` if classification is unavailable or unmatched
     :raises ProviderError: If provider execution fails
@@ -58,6 +60,7 @@ def classify_transcript(
         max_output_tokens=64,
         allow_remote=llm_allow_remote,
         allow_insecure_http=llm_allow_insecure_http,
+        allow_loopback_http=llm_allow_loopback_http,
         allow_custom_executable=llm_allow_custom_executable,
     ).strip().lower()
 

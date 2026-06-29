@@ -5,11 +5,15 @@ Prompt loading and routing helpers for YATSEE intelligence jobs.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
+import re
+from pathlib import Path
+from typing import Any, Dict, List
 
 import toml
 
 from yatsee.core.errors import ConfigError
+
+_PROFILE_NAME_RE = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 DEFAULT_PROMPTS: Dict[str, str] = {
@@ -34,6 +38,69 @@ DEFAULT_PROMPT_ROUTER: Dict[str, Dict[str, str]] = {
         "final": "action_items",
     }
 }
+
+
+def validate_profile_name(job_profile: str) -> str:
+    """
+    Validate a prompt/profile name before using it as a path component.
+
+    Profiles are filesystem-backed, so names must be simple path components.
+    This preserves profile flexibility without allowing path traversal or nested
+    path injection through CLI arguments.
+
+    :param job_profile: Requested profile name
+    :return: Normalized profile name
+    :raises ConfigError: If the profile name is empty or unsafe
+    """
+    normalized = job_profile.strip() if job_profile else ""
+    if not _PROFILE_NAME_RE.fullmatch(normalized):
+        raise ConfigError(
+            "Invalid job profile. Use only letters, numbers, underscores, dashes, and dots."
+        )
+    return normalized
+
+
+def _prompt_roots(entity_cfg: Dict[str, Any]) -> List[Path]:
+    """
+    Return prompt root directories in lookup precedence order.
+
+    Entity-local prompt bundles override project prompt bundles. Both roots are
+    optional so local installs can remain small while still supporting profile
+    discovery when prompt files are present.
+
+    :param entity_cfg: Merged entity configuration
+    :return: Prompt root paths
+    """
+    roots: List[Path] = []
+    data_path = str(entity_cfg.get("data_path", "")).strip()
+    if data_path:
+        roots.append(Path(data_path) / "prompts")
+
+    roots.append(Path("prompts"))
+    return roots
+
+
+def discover_prompt_profiles(entity_cfg: Dict[str, Any] | None = None) -> List[str]:
+    """
+    Discover filesystem-backed prompt profiles.
+
+    Discovery is intentionally mechanical: any direct child directory containing
+    a ``prompts.toml`` file is considered a profile candidate. Validation still
+    happens separately when each bundle is loaded.
+
+    :param entity_cfg: Optional merged entity configuration
+    :return: Sorted profile names
+    """
+    profile_names = set()
+    for root in _prompt_roots(entity_cfg or {}):
+        if not root.is_dir():
+            continue
+
+        for child in root.iterdir():
+            if child.is_dir() and (child / "prompts.toml").is_file():
+                profile_names.add(child.name)
+
+    return sorted(profile_names)
 
 
 def validate_prompt(
@@ -97,7 +164,12 @@ def _validate_prompt_bundle(bundle: Dict[str, Any]) -> None:
                 )
 
 
-def load_prompt_bundle(entity_cfg: Dict[str, Any], job_profile: str) -> Dict[str, Any]:
+def load_prompt_bundle(
+    entity_cfg: Dict[str, Any],
+    job_profile: str,
+    *,
+    require_prompt_file: bool = False,
+) -> Dict[str, Any]:
     """
     Load prompts and routing metadata for an intelligence job profile.
 
@@ -106,11 +178,13 @@ def load_prompt_bundle(entity_cfg: Dict[str, Any], job_profile: str) -> Dict[str
     The resulting structure is validated before being returned.
 
     :param entity_cfg: Merged entity configuration
-    :param job_profile: Job profile such as civic or research
+    :param job_profile: Prompt/profile name
+    :param require_prompt_file: Whether a filesystem-backed profile file is required
     :return: Prompt bundle dictionary
     :raises ConfigError: If prompt loading or validation fails
     """
     prompt_types_path = ""
+    job_profile = validate_profile_name(job_profile)
 
     entity_prompt_file = os.path.join(
         entity_cfg.get("data_path", ""),
@@ -124,6 +198,11 @@ def load_prompt_bundle(entity_cfg: Dict[str, Any], job_profile: str) -> Dict[str
         prompt_types_path = entity_prompt_file
     elif os.path.isfile(default_prompt_file):
         prompt_types_path = default_prompt_file
+
+    if not prompt_types_path and require_prompt_file:
+        raise ConfigError(
+            f"No prompt bundle found for profile '{job_profile}'. Expected prompts.toml under a profile directory."
+        )
 
     if not prompt_types_path:
         bundle = {
