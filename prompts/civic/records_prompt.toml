@@ -1,0 +1,277 @@
+# YATSEE civic records extraction prompts.
+# Each meeting type routes to one chunk-level extraction prompt. Parsed chunk
+# records are consolidated deterministically by code; no LLM reduction or final
+# synthesis stage is used.
+
+[records_router]
+city_council = "city_council_records"
+finance_committee = "finance_committee_records"
+committee_of_the_whole = "committee_of_the_whole_records"
+zoning_committee = "zoning_committee_records"
+general = "general_records"
+
+[prompts.city_council_records]
+text = """
+You are extracting structured civic records from one segment of a city council transcript.
+
+Context: {context}
+
+Transcript Segment:
+{text}
+
+Extract only facts explicitly supported by this segment. Missing data is correct. Invented data is incorrect.
+
+Prioritize:
+- explicit attendance and absence from roll call
+- agenda and minutes approvals
+- ordinances and resolutions
+- contracts, spending, claims, bids, and consent-agenda amounts
+- motions, makers, seconders, vote methods, outcomes, and explicit roll calls
+- proclamations, recognitions, appointments, and presentations as distinct from formal action
+- public comments as distinct from council action
+- explicit follow-ups and quantitative facts
+
+Rules:
+- Emit one record per event or fact. Do not combine motion, vote, discussion, and public comment into one record.
+- Do not infer attendance from names mentioned or people who speak.
+- Do not infer a motion, seconder, individual vote, unanimity, or outcome.
+- If a roll call is interrupted or no result is announced, use outcome "unknown" and omit unsupported votes.
+- Do not treat a proclamation, recognition, presentation, recommendation, or public request as council action.
+- Preserve exact numbers and qualifiers such as approximately, up to, more than, or approaching.
+- Use an exact or near-exact contiguous transcript excerpt as evidence.
+- Omit absent optional attributes. Do not use placeholders such as N/A, none, or unknown except for an explicitly uncertain outcome.
+- Output compact JSONL only. Write one complete JSON object per line. Do not use Markdown fences, array brackets, commas between lines, or commentary.
+
+Allowed record_type values:
+attendance, procedural_action, presentation, discussion, motion, vote, public_comment, financial, metric, ordinance, resolution, contract, project, appointment, proclamation, recognition, follow_up, other
+
+Each record object must match this shape:
+{{
+  "record_type": "",
+  "subject": "",
+  "summary": "",
+  "evidence": "",
+  "attribution": "<person, role, department, or governing body if explicit>"
+}}
+
+- Do not infer attribution.
+- Omit attribution when it is not explicitly supported.
+
+The optional attributes object may contain other explicitly supported structured details.
+Omit attributes when no other structured details are supported.
+
+Return one compact JSON object per line.
+Do not wrap records in an array.
+Do not add commas between lines.
+If no supported records exist, return exactly [].
+"""
+
+[prompts.finance_committee_records]
+text = """
+You are extracting structured civic records from one segment of a finance or budget committee transcript.
+
+Context: {context}
+
+Transcript Segment:
+{text}
+
+Extract only facts explicitly supported by this segment. Missing data is correct. Invented data is incorrect.
+
+Prioritize:
+- budgets, appropriations, levies, taxes, reserves, transfers, revenues, and expenditures
+- grants, contracts, bids, invoices, claims, audits, loans, and funding sources
+- exact monetary amounts, rates, terms, dates, deltas, and numeric qualifiers
+- motions, makers, seconders, vote methods, outcomes, and explicit roll calls
+- recommendations or forwarding actions only when explicitly stated
+- public comments and follow-ups related to financial items
+
+Rules:
+- Emit one record per event or fact.
+- Preserve raw financial wording exactly; do not calculate totals, percentages, differences, or impacts.
+- Keep qualifiers such as approximately, up to, not to exceed, more than, and approaching.
+- Do not infer funding sources, fiscal effects, approval, attendance, votes, or unanimity.
+- Separate financial discussion from formal motions and votes.
+- Use an exact or near-exact contiguous transcript excerpt as evidence.
+- Omit absent optional attributes and placeholders.
+- Output compact JSONL only. Write one complete JSON object per line. Do not use Markdown fences, array brackets, commas between lines, or commentary.
+
+Allowed record_type values:
+attendance, procedural_action, presentation, discussion, motion, vote, public_comment, financial, metric, ordinance, resolution, contract, project, appointment, proclamation, recognition, follow_up, other
+
+Each record object must match this shape:
+{{
+  "record_type": "",
+  "subject": "",
+  "summary": "",
+  "evidence": "",
+  "attribution": "<person, role, department, or governing body if explicit>"
+}}
+
+- Do not infer attribution.
+- Omit attribution when it is not explicitly supported.
+
+The optional attributes object may contain other explicitly supported structured details.
+Omit attributes when no other structured details are supported.
+
+Return one compact JSON object per line.
+Do not wrap records in an array.
+Do not add commas between lines.
+If no supported records exist, return exactly [].
+"""
+
+[prompts.committee_of_the_whole_records]
+text = """
+You are extracting structured civic records from one segment of a committee of the whole transcript.
+
+Context: {context}
+
+Transcript Segment:
+{text}
+
+Extract only facts explicitly supported by this segment. Missing data is correct. Invented data is incorrect.
+
+Prioritize:
+- presentations, departmental reports, policy discussion, and recommendations
+- explicit metrics, infrastructure work, service-call counts, grants, and projects
+- motions, makers, seconders, vote methods, outcomes, and forwarding actions
+- recognitions and presentations as distinct from appointments or formal action
+- public comments only when the transcript identifies them as public comment
+- explicit follow-ups or requests for later action
+
+Rules:
+- Emit one record per event or fact.
+- Do not convert presentation rhetoric, discussion, or general agreement into a recommendation or motion.
+- Do not infer attendance from presenters, staff, or names mentioned.
+- Do not infer a vote outcome from collective aye language unless an outcome is announced.
+- Preserve exact metrics and numeric qualifiers.
+- Use an exact or near-exact contiguous transcript excerpt as evidence.
+- Omit absent optional attributes and placeholders.
+- Output compact JSONL only. Write one complete JSON object per line. Do not use Markdown fences, array brackets, commas between lines, or commentary.
+
+Allowed record_type values:
+attendance, procedural_action, presentation, discussion, motion, vote, public_comment, financial, metric, ordinance, resolution, contract, project, appointment, proclamation, recognition, follow_up, other
+
+Each record object must match this shape:
+{{
+  "record_type": "",
+  "subject": "",
+  "summary": "",
+  "evidence": "",
+  "attribution": "<person, role, department, or governing body if explicit>"
+}}
+
+- Do not infer attribution.
+- Omit attribution when it is not explicitly supported.
+
+The optional attributes object may contain other explicitly supported structured details.
+Omit attributes when no other structured details are supported.
+
+Return one compact JSON object per line.
+Do not wrap records in an array.
+Do not add commas between lines.
+If no supported records exist, return exactly [].
+"""
+
+[prompts.zoning_committee_records]
+text = """
+You are extracting structured civic records from one segment of a zoning or planning committee transcript.
+
+Context: {context}
+
+Transcript Segment:
+{text}
+
+Extract only facts explicitly supported by this segment. Missing data is correct. Invented data is incorrect.
+
+Prioritize:
+- case numbers, addresses, parcels, plats, permits, variances, special uses, and rezoning requests
+- applicant, staff, and public-hearing statements with explicit attribution
+- conditions, dimensions, setbacks, land-use details, and development proposals
+- motions, recommendations, approvals, denials, deferrals, votes, and explicit roll calls
+- distinction between committee recommendation and final governing-body approval
+- explicit follow-ups and unresolved conditions
+
+Rules:
+- Emit one record per event or fact.
+- Do not infer approval, denial, permit status, neighborhood sentiment, or final action.
+- Do not derive dimensions, costs, regulatory effects, or property relationships.
+- Do not infer attendance from speakers or people mentioned.
+- Use an exact or near-exact contiguous transcript excerpt as evidence.
+- Omit absent optional attributes and placeholders.
+- Output compact JSONL only. Write one complete JSON object per line. Do not use Markdown fences, array brackets, commas between lines, or commentary.
+
+Allowed record_type values:
+attendance, procedural_action, presentation, discussion, motion, vote, public_comment, financial, metric, ordinance, resolution, contract, project, appointment, proclamation, recognition, follow_up, other
+
+Each record object must match this shape:
+{{
+  "record_type": "",
+  "subject": "",
+  "summary": "",
+  "evidence": "",
+  "attribution": "<person, role, department, or governing body if explicit>"
+}}
+
+- Do not infer attribution.
+- Omit attribution when it is not explicitly supported.
+
+The optional attributes object may contain other explicitly supported structured details.
+Omit attributes when no other structured details are supported.
+
+Return one compact JSON object per line.
+Do not wrap records in an array.
+Do not add commas between lines.
+If no supported records exist, return exactly [].
+"""
+
+[prompts.general_records]
+text = """
+You are extracting structured records from one segment of a public meeting transcript.
+
+Context: {context}
+
+Transcript Segment:
+{text}
+
+Extract only facts explicitly supported by this segment. Missing data is correct. Invented data is incorrect.
+
+Prioritize:
+- explicit attendance and procedural actions
+- presentations and factual discussion
+- motions, makers, seconders, votes, and announced outcomes
+- financial and quantitative facts
+- ordinances, resolutions, contracts, appointments, proclamations, recognitions, and follow-ups
+- public comments as distinct from official action
+
+Rules:
+- Emit one record per event or fact.
+- Prefer omission over inference.
+- Do not infer attendance, motions, votes, unanimity, outcomes, speakers, or follow-ups.
+- Preserve exact numbers and qualifiers.
+- Use an exact or near-exact contiguous transcript excerpt as evidence.
+- Omit absent optional attributes and placeholders.
+- Output compact JSONL only. Write one complete JSON object per line. Do not use Markdown fences, array brackets, commas between lines, or commentary.
+
+Allowed record_type values:
+attendance, procedural_action, presentation, discussion, motion, vote, public_comment, financial, metric, ordinance, resolution, contract, project, appointment, proclamation, recognition, follow_up, other
+
+Each record object must match this shape:
+{{
+  "record_type": "",
+  "subject": "",
+  "summary": "",
+  "evidence": "",
+  "attribution": "<person, role, department, or governing body if explicit>"
+}}
+
+- Do not infer attribution.
+- Omit attribution when it is not explicitly supported.
+
+The optional attributes object may contain other explicitly supported structured details.
+Omit attributes when no other structured details are supported.
+
+Return one compact JSON object per line.
+Do not wrap records in an array.
+Do not add commas between lines.
+If no supported records exist, return exactly [].
+"""

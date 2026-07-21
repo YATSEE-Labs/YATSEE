@@ -10,43 +10,6 @@ zoning_committee = { first = "facts", multi = "most_detailed", final = "final_pa
 general = { first = "facts", multi = "most_detailed", final = "final_pass_detailed" }
 
 # =========================
-# YATSEE Classifier Allowed Types
-# =========================
-[classifier_types]
-allowed = [
-    "city_council",
-    "finance_committee",
-    "committee_of_the_whole",
-    "zoning_committee",
-    "general"
-]
-
-# =========================
-# YATSEE Classifier Prompt
-# =========================
-[classifier_prompt]
-text = """
-You are a routing assistant. Classify this research meeting to select the correct summary template.
-
-Context: {context}
-
-Transcript Snippet:
-{text}
-
-Classify as one of: city_council, finance_committee, committee_of_the_whole, zoning_committee, general
-
-Analysis Rules:
-1. Finance mentions → finance_committee
-2. Committee of the Whole → committee_of_the_whole
-3. Zoning/Planning → zoning_committee
-4. Regular council → city_council
-5. Anything else → general
-
-Return only the classification value as plain text.
-"""
-
-
-# =========================
 # YATSEE Prompt Templates
 # =========================
 [prompts.facts]

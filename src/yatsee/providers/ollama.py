@@ -45,24 +45,35 @@ def generate_text(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
+    prompt_tokens = estimate_provider_tokens(
+        provider_name="ollama",
+        model=model,
+        text=prompt,
+    )
+    available_output_tokens = max(1, num_ctx - prompt_tokens - 1)
+
+    # Match the original local summarizer semantics: absent an explicit cap,
+    # generation may use the context remaining after the prompt. Narrow callers
+    # such as classification may still set a smaller per-call limit.
     if max_output_tokens is None:
-        prompt_tokens = estimate_provider_tokens(
-            provider_name="ollama",
-            model=model,
-            text=prompt,
+        max_output_tokens = available_output_tokens
+    else:
+        max_output_tokens = max(
+            1,
+            min(max_output_tokens, available_output_tokens),
         )
-        max_output_tokens = max(1, min(2048, num_ctx - prompt_tokens - 1))
 
     payload = {
         "model": model,
         "prompt": prompt,
         "stream": True,
+        "think": False,
         "options": {
             "num_ctx": num_ctx,
             "num_predict": max_output_tokens,
             "temperature": temperature,
-            "seed": 42
-        }
+            "seed": 42,
+        },
     }
 
     try:

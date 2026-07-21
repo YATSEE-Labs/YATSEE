@@ -1,437 +1,106 @@
 # YATSEE Troubleshooting
 
-YATSEE is local-first, so performance and failure modes depend on the local machine, installed tools, selected transcription backend, selected LLM provider, provider security policy, model settings, and available data artifacts.
+Start with the earliest broken artifact. Prompt tuning cannot repair corrupt audio or a weak transcript.
 
-Some failures come from the core pipeline. Others come from the chosen transcription backend, LLM provider, local runtime, hosted API, CLI integration, or filesystem state.
-
----
-
-# Quick Health Checks
-
-Check both entrypoints:
+## Quick health checks
 
 ```bash
 yatsee --help
 python -m yatsee --help
-```
-
-Check command groups:
-
-```bash
-yatsee config --help
-yatsee audio --help
-yatsee transcript --help
-yatsee intel --help
-yatsee intel summarize --help
-yatsee intel signals --help
-yatsee intel prompts validate
-```
-
-Compile package files:
-
-```bash
 python -m compileall src/yatsee
-```
 
-Validate config:
-
-```bash
 yatsee config validate
+yatsee config resolve -e <entity>
+
+yatsee intel prompts validate -j civic
+yatsee intel records -e <entity> -j civic --print-prompts
 ```
 
-Resolve an entity:
-
-```bash
-yatsee config resolve --entity <entity>
-```
-
----
-
-# Common Issues
-
-## CLI command is missing
-
-If a command does not appear in help output:
-
-```bash
-yatsee --help
-yatsee intel --help
-```
-
-Confirm the installed package is the editable checkout you are modifying:
+Confirm the active checkout when commands appear stale:
 
 ```bash
 which yatsee
 python -c "import yatsee; print(yatsee.__file__)"
-```
-
-Reinstall editable mode if needed:
-
-```bash
 pip install -e .
 ```
 
-If `python -m yatsee` works but `yatsee` does not, the console script may be stale. Reinstall the package.
+## Configuration and discovery
 
-## Entity does not appear
+| Symptom | Check | Typical fix |
+|---|---|---|
+| Entity missing | `yatsee config entity list` | Register it, then run `config init` |
+| Local config missing | `data/<entity>/config.toml` | `yatsee config init -e <entity>` |
+| Unexpected paths or models | `yatsee config resolve -e <entity>` | Correct global or entity-local config |
+| No files discovered | Inspect resolved input directory | Move files or pass an explicit input path |
 
-List registered entities:
+## Audio and transcription
 
-```bash
-yatsee config entity list
-```
-
-If missing, add it:
-
-```bash
-yatsee config entity add \
-  --display-name "Example Entity" \
-  --entity example_entity \
-  --base "country.US.state.EX."
-```
-
-Scaffold local config:
-
-```bash
-yatsee config init --entity example_entity
-```
-
-## Local config missing
-
-Expected location:
-
-```text
-data/<entity>/config.toml
-```
-
-Create it:
-
-```bash
-yatsee config init --entity <entity>
-```
-
-## Runtime config does not match expectation
-
-Use resolve:
-
-```bash
-yatsee config resolve --entity <entity>
-```
-
-Check:
-
-- `data_path`
-- `[media].input_dir`
-- `[media].audio_dir`
-- selected models
-- selected LLM provider
-- output directories
-
----
-
-# Stage Troubleshooting
-
-## Audio formatting finds nothing
-
-Check raw media:
+### Formatting finds nothing
 
 ```bash
 find data/<entity>/downloads -maxdepth 2 -type f
-```
-
-Run dry-run:
-
-```bash
 yatsee audio format -e <entity> --dry-run
 ```
 
-Provide a direct input path:
+Check the configured media input path, supported extension, file size, and whether the source is corrupt.
 
-```bash
-yatsee audio format \
-  -e <entity> \
-  --input-dir /path/to/raw/media \
-  --dry-run
-```
-
-Common causes:
-
-- media is in the wrong entity directory
-- `[media].input_dir` points somewhere unexpected
-- the file extension is unsupported
-- the source file is empty or corrupt
-
-## `ffmpeg` is missing or not on `PATH`
+### `ffmpeg` is unavailable
 
 ```bash
 ffmpeg -version
 ffprobe -version
 ```
 
-Install `ffmpeg` and restart the shell if necessary.
+Install both tools and restart the shell if the executable path changed.
 
-## Transcription skips files
-
-Check formatted audio:
+### Transcription skips files
 
 ```bash
 find data/<entity>/audio -type f
-```
-
-Check target output directory:
-
-```bash
 find data/<entity>/transcripts_medium -name '*.vtt'
 ```
 
-Common causes:
+Existing VTTs are skipped. Confirm the selected model directory and whether the run expects whole files or audio chunks.
 
-- audio stage did not produce files
-- output transcripts already exist
-- wrong model/output directory is being inspected
-- chunked vs non-chunked input mismatch
+### GPU memory or performance problems
 
-## GPU memory exhaustion
+- confirm the intended device is active;
+- check other GPU processes;
+- reduce model or context size;
+- avoid concurrent GPU-heavy stages;
+- retry on CPU when necessary;
+- confirm backend-specific dependencies are installed.
 
-If transcription or local summarization fails with out-of-memory errors:
+## Transcript preparation
 
-- reduce the transcription model size
-- reduce summarization chunk size or context size
-- avoid running multiple GPU-heavy stages at the same time
-- retry on CPU if needed
-- check whether another process is using the GPU
-
-## Unexpectedly slow transcription
-
-Check:
-
-- intended device is actually being used
-- GPU is visible to the environment
-- another process is not consuming GPU memory
-- faster-whisper / Whisper dependencies are installed correctly
-- chunking settings are sensible for the hardware
-
-## Slice stage finds nothing
-
-Check VTT files:
+### Slice finds nothing
 
 ```bash
 find data/<entity>/transcripts_medium -name '*.vtt'
-```
-
-Run:
-
-```bash
 yatsee transcript slice -e <entity> --force
 ```
 
-If using a non-default transcription model directory, pass the model or input path explicitly.
+Pass `--vtt-input` or `--model` when using a non-default transcript directory.
 
-## Normalize stage finds nothing
-
-Check sliced TXT files:
+### Normalize finds nothing
 
 ```bash
 find data/<entity>/transcripts_medium -name '*.txt'
-```
-
-Run:
-
-```bash
 yatsee transcript normalize -e <entity> --force
 ```
 
-If using another transcript directory:
+Use `--input-path` and `--output-dir` for nonstandard layouts.
 
-```bash
-yatsee transcript normalize \
-  --input-path /path/to/transcript_txt_files \
-  --output-dir /path/to/normalized_out
-```
+### Transcript quality is poor
 
----
-
-# Intelligence Stage Troubleshooting
-
-## LLM provider is unavailable
-
-If `yatsee intel summarize` fails with a connection error, timeout, or empty response:
-
-- confirm `llm_provider`
-- confirm `llm_provider_url`
-- confirm the requested model exists for that provider
-- confirm the provider is reachable
-- confirm provider hardening settings are not blocking it
-
-Examples:
-
-- Ollama not running
-- llama.cpp server not running
-- `codex_cli` not installed
-- hosted API base URL is wrong
-
-## Hosted API authentication failure
-
-If OpenAI or Anthropic requests fail immediately:
-
-- confirm `llm_api_key_env` or `YATSEE_LLM_API_KEY`; avoid putting hosted API keys in shell history
-- confirm the key is valid
-- confirm the selected provider matches the supplied key
-- confirm model access
-
-Typical symptoms:
-
-- HTTP 401
-- HTTP 403
-- model access denied
-- request rejected before generation
-
-## Provider target blocked by hardening settings
-
-If a provider target looks valid but YATSEE rejects it before execution, review:
-
-```text
-llm_allow_remote
-llm_allow_insecure_http
-llm_allow_loopback_http
-llm_allow_custom_executable
-```
-
-Typical cases:
-
-- local Ollama or llama.cpp target blocked because `llm_allow_loopback_http = false`
-- LAN Ollama or llama.cpp target blocked because `llm_allow_remote = false`
-- LAN/plain-HTTP provider blocked because `llm_allow_insecure_http = false`
-- hosted HTTPS provider blocked because `llm_allow_remote = false`
-- custom `codex_cli` executable blocked because `llm_allow_custom_executable = false`
-
-## Local model runtime is unavailable
-
-Check:
-
-- runtime is running
-- model is installed locally
-- provider URL is correct
-- host is reachable
-- remote target is allowed by security settings
-
-## `codex_cli` execution failure
-
-Check:
-
-- `codex` executable is installed
-- executable is available on `PATH`
-- CLI is authenticated
-- CLI supports expected invocation style
-- custom executable targets are allowed if using a non-default command
-
-## Unexpectedly slow summarization
-
-Check:
-
-- selected provider
-- selected model
-- context size
-- chunk size
-- GPU/CPU behavior
-- local provider logs
-- whether another local model process is running
-
-## Pricing output is missing
-
-Check:
-
-- `show_pricing = true` or `--show-pricing`
-- selected `pricing_provider`
-- selected `pricing_model`
-- pricing table coverage
-
-Remember: pricing is reference pricing, not actual local compute cost.
-
----
-
-# Meeting Signals Troubleshooting
-
-## Signals command missing
-
-Check:
-
-```bash
-yatsee intel --help
-yatsee intel summarize --help
-yatsee intel signals --help
-yatsee intel prompts validate
-```
-
-If missing, confirm the CLI split files are installed from the active checkout:
-
-```bash
-pip install -e .
-```
-
-## Signals find nothing
-
-Check normalized transcripts:
-
-```bash
-find data/<entity>/normalized -name '*.txt'
-```
-
-Run with force:
-
-```bash
-yatsee intel signals -e <entity> --force
-```
-
-Use a direct input path:
-
-```bash
-yatsee intel signals \
-  --input-path ./normalized \
-  --output-dir ./meeting_signals
-```
-
-## Signals are sparse
-
-Signals are deterministic evidence candidates. Sparse output usually means:
-
-- transcript text is weak
-- normalization removed useful cues
-- the meeting did not contain many detectable patterns
-- the signal rules need expansion
-- the source contains informal discussion rather than formal actions
-
-Signals are not a replacement for summaries or minutes.
-
----
-
-## Prompt bundle validation fails
-
-Run:
-
-```bash
-yatsee intel prompts validate
-yatsee intel prompts validate --entity <entity>
-```
-
-This validates prompt/profile wiring only. It does not judge prompt wording, output quality, or whether a profile is mature enough for production use.
-
----
-
-# Transcript Quality Issues
-
-If downstream summaries are weak because transcript quality is poor, check transcript artifacts before tuning prompts or models. Bad VTTs will flow into slicing, normalization, summaries, signals, and search.
-
-First run the experimental transcript QA report helper:
+Run QA before changing prompts:
 
 ```bash
 python scripts/qa_transcript_report.py --details
 python scripts/qa_transcript_report.py --json qa_report.json
 ```
 
-The QA report uses ASR loop findings as the main rebuild signal. Files marked `rerun` or `block` should be retranscribed rather than edited by a fixer.
-
-To reset bad VTT files and matching hash-tracker entries for rebuild, use the reset helper in dry-run mode first:
+ASR loops should be rebuilt, not edited into plausible text. Preview reset actions before applying them:
 
 ```bash
 python scripts/qa_reset_vtt_for_rebuild.py \
@@ -439,133 +108,148 @@ python scripts/qa_reset_vtt_for_rebuild.py \
   --qa-report qa_report.json
 ```
 
-Apply only after reviewing the matched files and tracker updates:
+Also review audio quality, language, model choice, people aliases, local entities, and proven replacement rules.
 
-```bash
-python scripts/qa_reset_vtt_for_rebuild.py \
-  --entity <entity> \
-  --qa-report qa_report.json \
-  --apply
+## Provider failures
 
-yatsee audio transcribe \
-  -e <entity> \
-  --faster \
-  --get-chunks
-```
+### Provider unavailable or request fails
 
-The default transcription profile is the QA-safe baseline. Use QA-selected rebuilds only for transcripts that were reset after review.
+Check:
 
-QA action boundaries:
+- `llm_provider` and `llm_provider_url`;
+- whether the server or CLI is running;
+- whether the model is installed or accessible;
+- authentication for hosted providers;
+- provider hardening settings;
+- provider logs for timeout or context failures.
 
-| Issue type | Action | Notes |
-|---|---|---|
-| ASR loop / repeated hallucinated text | rebuild | Do not repair content loops in a fixer. |
-| Impossible cue duration | fix/report | Timestamp-only repair may be safe when implemented conservatively. |
-| Cue overlap / non-monotonic timestamp | fix/report | Safe repair should not change transcript text. |
-| Long low-information cue | report | Usually inspect only; not a direct rebuild trigger by itself. |
-| High 30-second cue count | report | Supporting signal, not enough by itself to rebuild. |
+### Target blocked by security policy
 
-Also check:
+| Target | Required settings |
+|---|---|
+| Loopback HTTP | `llm_allow_loopback_http=true` |
+| Remote HTTPS | `llm_allow_remote=true` |
+| Remote HTTP | `llm_allow_remote=true`, `llm_allow_insecure_http=true` |
+| Custom executable | `llm_allow_custom_executable=true` |
 
-- audio quality
-- transcription model choice
-- language setting
-- chunking behavior
-- `[people]`, `[people.legacy]`, and `[entities]` context
-- `[replacements]` for recurring ASR failures
+Do not enable remote or insecure access without confirming the target.
 
-Check normalized text before tuning prompts:
+### Hosted authentication failure
 
-```bash
-sed -n '1,220p' data/<entity>/normalized/<file>.txt
-```
+Prefer `llm_api_key_env` or `YATSEE_LLM_API_KEY`. Confirm the provider, key, model access, and base URL. HTTP 401 and 403 errors normally occur before generation.
 
----
+## Summary problems
 
-# Useful Isolation Steps
+### Summary command is slow
 
-## Test one stage at a time
+Check model size, provider logs, chunk size, context size, device use, and whether additional reduction passes are being triggered.
 
-```bash
-yatsee audio format -e <entity>
-yatsee audio transcribe -e <entity>
-yatsee transcript slice -e <entity>
-yatsee transcript normalize -e <entity>
-yatsee intel summarize -e <entity>
-yatsee intel signals -e <entity>
-```
+### Summary quality is weak
 
-## Test one file instead of a directory
+Review in this order:
 
-Point a stage at a single known file to separate content issues from batch-processing issues.
+1. source audio;
+2. VTT transcript;
+3. sliced TXT;
+4. normalized TXT;
+5. entity names and replacements;
+6. meeting classification;
+7. selected prompt route;
+8. model behavior.
 
-## Print prompts without running inference
+Inspect prompts and chunk output:
 
 ```bash
 yatsee intel summarize -e <entity> --print-prompts
-```
-
-## Write chunk outputs for inspection
-
-```bash
 yatsee intel summarize -e <entity> --enable-chunk-writer
 ```
 
-This helps determine whether the issue begins at:
+## Records problems
 
-- chunking
-- prompt routing
-- intermediate summarization
-- final synthesis
+### `records_prompt.toml` is missing
 
-## Override provider settings for one run
+The selected profile does not support records. Use `civic`, add a valid sidecar, or choose another profile intentionally.
 
 ```bash
-yatsee intel summarize \
-  -e <entity> \
-  --llm-provider ollama \
-  --llm-provider-url http://localhost:11434
-
-yatsee intel summarize \
-  -e <entity> \
-  --llm-provider llamacpp \
-  --llm-provider-url http://localhost:8080
+yatsee intel records -e <entity> -j civic --print-prompts
 ```
 
-Provider selection can be overridden from the CLI, but provider hardening remains config-driven.
+The built-in `research` profile currently has no records sidecar.
 
----
+### Records output is reused
 
-# Reporting Issues
+A complete `.records.json` artifact is reused only when its normalized transcript hash and extraction fingerprint match the current run. The fingerprint covers extraction-relevant inputs such as the model, prompts, profile, meeting-type controls, chunking settings, and entity context.
 
-When reporting a failure, include:
+A stale, malformed, partial, or incompatible artifact triggers a full transcript extraction automatically. Use `--force` only to bypass an otherwise compatible cache entry.
 
-- operating system
-- CPU, GPU, and RAM details
-- exact command
-- active provider and model
-- full terminal error output
-- whether the issue is reproducible
-- whether it affects one file or all files
-- whether it is provider-specific
+### Classification selected the wrong route
 
-For provider-hardening issues, include:
+Classification identifies the formal meeting body, but filenames and transcript openings may be ambiguous. Override the route:
+
+```bash
+yatsee intel records \
+  -e <entity> \
+  --meeting-type committee_of_the_whole
+```
+
+Use `--disable-auto-classification` to select the `general` route.
+
+### Chunk response contains invalid JSONL
+
+Inspect:
 
 ```text
-llm_provider
-llm_provider_url
-llm_allow_remote
-llm_allow_insecure_http
-llm_allow_loopback_http
-llm_allow_custom_executable
+records/<model>/<transcript>/raw/
+records/<model>/<transcript>/errors/
 ```
 
-For pricing issues, include:
+Common causes:
 
-```text
-show_pricing
-pricing_provider
-pricing_model
-reported token counts
-reported estimated cost
+- model added commentary or malformed surrounding fences;
+- output was truncated;
+- required fields are missing;
+- `record_type` is unsupported;
+- provider returned an empty response.
+
+Reduce chunk size, verify the selected prompt, or test a more reliable structured-output model. The raw response is preserved. Valid JSONL lines survive malformed or truncated sibling lines; diagnostics are recorded under `errors/`, later chunks continue, and the transcript attempt is written as partial.
+
+### Records are duplicated
+
+Only exact normalized duplicates are merged. Similar records remain separate by design. This avoids unsafe fuzzy merging and conflict resolution.
+
+### Records are sparse
+
+Check the selected route, chunk output, transcript quality, and whether the segment actually contains explicit records. The prompt intentionally prefers omission over unsupported inference.
+
+### Partial records run does not resume
+
+Current records runs are transcript-level, not chunk-resumable. Compatible complete artifacts are reused when the normalized transcript hash and extraction fingerprint match. A stale or missing artifact triggers a full transcript extraction. Partial attempts are written separately and do not replace a previous complete artifact.
+
+## Pricing output is missing
+
+Confirm `show_pricing`, `pricing_provider`, `pricing_model`, and table coverage. Pricing is a hosted-provider reference estimate, not local compute cost.
+
+## Isolate one file
+
+Use explicit file paths and output directories to separate content failures from batch behavior. For records:
+
+```bash
+yatsee intel records \
+  --txt-input ./normalized/meeting.txt \
+  --output-dir ./records_test \
+  --model gemma4:e4b \
+  -j civic
 ```
+
+## Reporting an issue
+
+Include:
+
+- operating system, Python version, CPU, GPU, and RAM;
+- exact command;
+- entity or explicit paths;
+- provider, model, and target;
+- full error text;
+- whether one file or the whole batch fails;
+- relevant resolved config with secrets redacted;
+- prompt route and raw chunk artifact when the problem is model output.

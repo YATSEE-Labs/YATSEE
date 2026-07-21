@@ -1,293 +1,62 @@
-# YATSEE Configuration & Orchestration Guide
+# YATSEE Configuration Guide
 
-YATSEE uses layered configuration to resolve defaults, identify entities, select models, choose LLM providers, apply provider security policy, and process local media across the CLI.
+YATSEE uses layered TOML configuration for entities, paths, models, providers, security policy, and output behavior.
 
-Most configuration can stay at defaults. The parts that matter most are:
-
-- entity registry
-- entity-local settings
-- media paths
-- local divisions, titles, people, entities, and replacements
-- model settings
-- LLM provider settings
-- provider security policy
-- prompt profiles
-
-YATSEE core is provider-neutral for source acquisition. It starts once compatible media exists locally.
-
----
-
-# Table of Contents
-
-- [Configuration Model](#configuration-model)
-- [CLI Shape](#cli-shape)
-- [New Entity Onboarding Workflow](#new-entity-onboarding-workflow)
-- [Global System Configuration](#global-system-configuration)
-- [Entity Registry](#entity-registry)
-- [Entity-Local Configuration](#entity-local-configuration)
-- [Entity Data Layout](#entity-data-layout)
-- [Media Paths](#media-paths)
-- [Divisions](#divisions)
-- [Titles](#titles)
-- [People](#people)
-- [Entities](#entities)
-- [Replacements](#replacements)
-- [Validation and Resolution](#validation-and-resolution)
-- [LLM Provider Configuration and Security](#llm-provider-configuration-and-security)
-- [Pricing Reference Settings](#pricing-reference-settings)
-- [Models](#models)
-- [Prompt Profiles](#prompt-profiles)
-- [Entity Configuration: What Usually Needs Editing](#entity-configuration-what-usually-needs-editing)
-- [Operational Notes](#operational-notes)
-- [Example: Add a County Board Entity](#example-add-a-county-board-entity)
-- [Final Guidance](#final-guidance)
-
----
-
-# Configuration Model
-
-YATSEE follows this pattern:
-
-1. Load global `yatsee.toml`
-2. Load entity-local `data/<entity>/config.toml`
-3. Merge entity-local settings over global defaults
-4. Resolve paths, models, LLM providers, prompts, and stage behavior
-5. Run the selected CLI stage
-
-The two main configuration layers are:
+## Load order
 
 ```text
 yatsee.toml
-  global defaults
-  entity registry
-  LLM provider settings
-  model settings
-  pricing reference settings
-
-data/<entity>/config.toml
-  entity-specific processing settings
-  local media path settings
-  local people / titles / divisions / entities
-  replacement rules
-  notes and local metadata
+  + data/<entity>/config.toml
+  → merged runtime configuration
+  → stage-specific resolution
 ```
 
-The global file says what entities exist. The local file says how that entity should be processed.
+Entity-local values override global defaults. Prompt files use a separate profile lookup described below.
 
-Provider-specific source acquisition is outside YATSEE core. Tools such as `yatsee-fetch`, upload workflows, local recordings, or manual copies can place compatible media in the configured raw media directory.
-
----
-
-# CLI Shape
-
-YATSEE is organized as command families:
-
-```text
-yatsee config ...
-yatsee audio ...
-yatsee transcript ...
-yatsee intel ...
-```
-
-The package also supports direct execution:
-
-```bash
-python -m yatsee --help
-```
-
-Current command families:
+## Configuration commands
 
 ```bash
 yatsee config entity list
-yatsee config entity add
-yatsee config entity remove
-yatsee config entity purge
-yatsee config init
-yatsee config validate
-yatsee config resolve
-
-yatsee audio format
-yatsee audio transcribe
-
-yatsee transcript slice
-yatsee transcript normalize
-
-yatsee intel summarize
-yatsee intel signals
+yatsee config entity add --display-name "Example Board" --entity example_board
+yatsee config init -e example_board
+yatsee config validate -e example_board
+yatsee config resolve -e example_board
 ```
 
-The CLI modules are split by command group:
+Resolved config is redacted by default. `--show-secrets` should be used only when the terminal output is safe to expose.
 
-```text
-src/yatsee/cli/
-  main.py
-  config.py
-  audio.py
-  transcript.py
-  intel.py
-```
-
-`cli/main.py` owns root parser setup and top-level error handling. The group modules own their command registration and handlers.
-
----
-
-# New Entity Onboarding Workflow
-
-Creating a new entity is a two-step process:
-
-1. Register the entity in global config
-2. Scaffold the local entity directory and `config.toml`
-
-Manual editing should happen after scaffolding.
-
-## Step 1: List existing entities
+Registry-only removal and full purge are different operations:
 
 ```bash
-yatsee config entity list
+yatsee config entity remove -e example_board
+yatsee config entity purge -e example_board --dry-run
+yatsee config entity purge -e example_board
 ```
 
-## Step 2: Add the entity to the global registry
+Always preview purge operations.
 
-```bash
-yatsee config entity add \
-  --display-name "Example County Board" \
-  --entity example_county_board \
-  --base "country.US.state.EX."
-```
+## Global configuration
 
-This creates a global registry entry similar to:
-
-```toml
-[entities.example_county_board]
-display_name = "Example County Board"
-base = "country.US.state.EX."
-entity = "example_county_board"
-```
-
-## Step 3: Scaffold local entity config
-
-```bash
-yatsee config init --entity example_county_board
-```
-
-This creates:
-
-```text
-data/example_county_board/
-└── config.toml
-```
-
-The scaffold command does not overwrite an existing `config.toml`.
-
-## Step 4: Edit local config
-
-```bash
-nano data/example_county_board/config.toml
-```
-
-At minimum, update:
-
-```toml
-[settings]
-entity_type = "county_board"
-entity_level = "county"
-location = "Example County, Example State"
-notes = "Example County Board public meeting recordings."
-
-[media]
-input_dir = "downloads"
-audio_dir = "audio"
-```
-
-Then refine:
-
-```text
-[divisions]
-[titles]
-[people]
-[entities]
-[replacements]
-```
-
-## Scaffold caveat
-
-Some generated scaffolds may need manual correction for non-city civic bodies.
-
-For county boards, make sure these are correct:
-
-```toml
-entity_type = "county_board"
-entity_level = "county"
-```
-
-## Step 5: Validate and resolve
-
-```bash
-yatsee config validate --entity example_county_board
-yatsee config resolve --entity example_county_board
-```
-
-## Step 6: Add raw media and run the pipeline
-
-Place compatible raw media in:
-
-```text
-data/example_county_board/downloads/
-```
-
-Then process:
-
-```bash
-yatsee audio format -e example_county_board
-yatsee audio transcribe -e example_county_board --faster
-yatsee transcript slice -e example_county_board --force
-yatsee transcript normalize -e example_county_board --force
-yatsee intel summarize -e example_county_board
-yatsee intel signals -e example_county_board
-```
-
----
-
-# Global System Configuration
-
-The global config file is usually:
-
-```text
-yatsee.toml
-```
-
-It defines:
-
-- root data directory
-- logging defaults
-- default models
-- LLM provider defaults
-- LLM provider security settings
-- pricing reference settings
-- entity registry
-
-Example:
+The global file is normally `yatsee.toml`.
 
 ```toml
 [system]
 root_data_dir = "./data"
 log_level = "INFO"
-log_format = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
-default_summarization_model = "mistral-nemo:latest"
 default_transcription_model = "medium"
+default_summarization_model = "gemma4:e4b"
+default_records_model = "gemma4:e4b"
 default_sentence_model = "en_core_web_sm"
 default_embedding_model = "all-MiniLM-L6-v2"
 
 llm_provider = "ollama"
 llm_provider_url = "http://localhost:11434"
-llm_api_key = ""
-# Prefer env-based secrets for hosted providers.
-# llm_api_key_env = "OPENAI_API_KEY"
+llm_api_key_env = "OPENAI_API_KEY"
 
+llm_allow_loopback_http = true
 llm_allow_remote = false
 llm_allow_insecure_http = false
-llm_allow_loopback_http = true
 llm_allow_custom_executable = false
 
 show_pricing = false
@@ -295,297 +64,126 @@ pricing_provider = "openai"
 pricing_model = "gpt-5.4"
 ```
 
----
+Only configure keys relevant to the providers and stages you use.
 
-# Entity Registry
-
-Entities are registered under:
+## Entity registry
 
 ```toml
-[entities.<entity_handle>]
-```
-
-Example:
-
-```toml
-[entities.example_city_council]
-display_name = "Example City Council"
-base = "country.US.state.EX."
-entity = "example_city_council"
-
-[entities.example_county_board]
+[entities.example_board]
 display_name = "Example County Board"
 base = "country.US.state.EX."
-entity = "example_county_board"
+entity = "example_board"
 ```
 
-The `entity` value should match the registry key and local data directory.
+The registry key, `entity` value, and data directory should stay aligned. Use lowercase handles with underscores.
 
----
+## Entity-local configuration
 
-# Entity-Local Configuration
-
-Each entity has a local config:
+Expected location:
 
 ```text
 data/<entity>/config.toml
 ```
 
-Example:
+Representative configuration:
 
 ```toml
 [settings]
 entity_type = "county_board"
 entity_level = "county"
 location = "Example County, Example State"
-data_path = "./data/example_county_board"
-notes = "Example County Board public meeting recordings."
-```
+data_path = "./data/example_board"
+notes = "Public meeting recordings."
 
-Common settings:
-
-| Field | Purpose |
-|---|---|
-| `entity_type` | Organization or meeting body type. |
-| `entity_level` | Jurisdiction or organization level. |
-| `location` | Human-readable location. |
-| `data_path` | Local data directory for the entity. |
-| `notes` | Human-readable context notes. |
-
----
-
-# Entity Data Layout
-
-YATSEE stores working artifacts under the entity directory.
-
-General shape:
-
-```text
-data/<entity>/
-  config.toml
-  downloads/
-  audio/
-  transcripts_<model>/
-  normalized/
-  summary_<model>/
-  meeting_signals/
-  yatsee_db/
-```
-
-Directory roles:
-
-| Directory | Purpose |
-|---|---|
-| `downloads/` | Raw media input. Often produced by acquisition tools. |
-| `audio/` | Formatted transcription-ready audio. |
-| `transcripts_<model>/` | VTT transcripts, sliced text, and optional segment JSONL for a transcription model. |
-| `normalized/` | Cleaned transcript text. |
-| `summary_<model>/` | Summary outputs for a summarization model. |
-| `meeting_signals/` | Deterministic signal artifacts from normalized transcripts. |
-| `yatsee_db/` | Optional or experimental index/search data. |
-
-Model-specific directory names intentionally preserve provenance.
-
-Temporary comparison directories may exist during testing:
-
-```text
-transcripts_medium_en/
-summary_nemo_bak/
-transcripts_medium_old/
-```
-
-These are comparison artifacts for validating updated models, prompts, normalizers, or pipeline behavior.
-
----
-
-# Media Paths
-
-YATSEE core does not care which external provider produced the raw media. It only needs compatible files.
-
-Example:
-
-```toml
 [media]
 input_dir = "downloads"
 audio_dir = "audio"
-```
 
-`input_dir = "downloads"` resolves to:
-
-```text
-data/<entity>/downloads/
-```
-
-`audio_dir = "audio"` resolves to:
-
-```text
-data/<entity>/audio/
-```
-
-The CLI can override input per run:
-
-```bash
-yatsee audio format \
-  -e example_county_board \
-  --input-dir /path/to/raw/media
-```
-
----
-
-# Divisions
-
-Use `[divisions]` for wards, districts, precincts, or similar structures.
-
-```toml
 [divisions]
 type = "districts"
 names = []
-```
 
-Start empty if you do not know the divisions yet.
-
----
-
-# Titles
-
-`[titles]` defines recurring role/title fragments. Use it for civic roles, offices, and staff titles that help prompts understand the local meeting context.
-
-```toml
 [titles]
-board = ["County Board", "Board Member", "Chair", "Vice Chair"]
-county_clerk = ["County Clerk", "Clerk"]
-administration = ["County Administrator", "County Manager"]
-staff = ["Director", "Coordinator", "Treasurer", "Sheriff", "State's Attorney", "Engineer", "Assessor"]
-```
+board = ["County Board", "Board Member", "Chair"]
+staff = ["Administrator", "Clerk", "Director"]
 
-Use `[people]` for names and `[entities]` for contractors, organizations, places, vendors, and other non-person terms.
-
-Operational note: transcription hotwords should come from people aliases and entity terms, not from generic title buckets. Broad title words such as `Mayor`, `Clerk`, `Alderman`, `Director`, or `Chief` can over-bias weak audio spans.
-
----
-
-# People
-
-`[people]` groups recurring people by role. These aliases are high-value transcription and normalization context.
-
-```toml
 [people.board_members]
 Jane_Doe = ["Jane", "Doe"]
-Sam_Smith = ["Sam", "Smith", "Samuel"]
-
-[people.staff]
-County_Clerk = ["Dovie", "Anderson"]
 
 [people.legacy]
 Former_Member = ["Former", "Member"]
-```
 
-Use `[people.legacy]` for former officials, former staff, or recurring historical names that may appear in older recordings but should not be represented as current officeholders.
-
-Guidelines:
-
-- use underscores in identifiers
-- include first names, last names, nicknames, and common variants
-- avoid title-heavy aliases such as `Mayor Jane Doe` unless they solve a proven recurring problem
-- keep the list useful, not exhaustive
-
----
-
-# Entities
-
-`[entities]` groups non-person terms that should remain available as local context, such as contractors, organizations, agencies, vendors, recurring places, project names, or local institutions.
-
-```toml
 [entities]
-third_parties = ["Fehr Graham", "Example Engineering"]
-organizations = ["ComEd", "Example Library"]
-places = ["Hancock Bridge", "Shawnee Street"]
-```
+organizations = ["Example Library", "Example Engineering"]
+places = ["Main Street", "Hancock Bridge"]
 
-Use `[entities]` instead of `[titles]` for contractors, companies, organizations, places, and other local terms that are not people or role titles.
-
----
-
-# Replacements
-
-`[replacements]` maps recurring ASR mistakes to corrected forms.
-
-```toml
 [replacements]
-"Example Bad Transcription" = "Example Correct Term"
-"Misheard Organization" = "Correct Organization"
+"Recurring ASR Error" = "Correct Local Term"
 ```
 
-Use replacements for repeated transcription errors, not every one-off mistake.
+Use these sections deliberately:
 
----
+| Section | Purpose |
+|---|---|
+| `[settings]` | Entity identity, location, data path, notes |
+| `[media]` | Raw media and audio directory names |
+| `[divisions]` | Wards, districts, precincts, or similar structures |
+| `[titles]` | Recurring roles, not people or organizations |
+| `[people]` | Current known participants and aliases |
+| `[people.legacy]` | Former or historical participants |
+| `[entities]` | Organizations, vendors, projects, and places |
+| `[replacements]` | Proven recurring ASR corrections |
 
-# Validation and Resolution
+Avoid bloated hotword and replacement lists. Broad titles and one-off errors can reduce transcription quality.
 
-Validate global and local config:
+## Model configuration
 
-```bash
-yatsee config validate --entity example_county_board
-```
-
-Print resolved config:
-
-```bash
-yatsee config resolve --entity example_county_board
-```
-
-List entities:
-
-```bash
-yatsee config entity list
-```
-
-Remove from registry only:
-
-```bash
-yatsee config entity remove --entity example_county_board
-```
-
-Preview purge:
-
-```bash
-yatsee config entity purge \
-  --entity example_county_board \
-  --dry-run
-```
-
-Run purge:
-
-```bash
-yatsee config entity purge \
-  --entity example_county_board
-```
-
-Use purge carefully. It removes both the registry entry and local filesystem data. Entity handles and purge paths are validated before deletion so a malformed handle or path traversal cannot escape the configured root data directory.
-
----
-
-# LLM Provider Configuration and Security
-
-YATSEE supports provider-based intelligence processing. This is separate from source acquisition providers.
-
-LLM provider config lives in `[system]`.
+Models are declared by exact configured name:
 
 ```toml
-[system]
-llm_provider = "ollama"
-llm_provider_url = "http://localhost:11434"
-llm_api_key = ""
-# Prefer env-based secrets for hosted providers.
-# llm_api_key_env = "OPENAI_API_KEY"
-
-llm_allow_remote = false
-llm_allow_insecure_http = false
-llm_allow_loopback_http = true
-llm_allow_custom_executable = false
+[models."gemma4:e4b"]
+append_dir = "summary_gemma4_e4b"
+max_tokens = 2500
+records_append_dir = "records/gemma4_e4b"
+records_max_tokens = 1500
+num_ctx = 16384
 ```
 
-Provider examples:
+Relevant fields:
+
+| Field | Used by | Meaning |
+|---|---|---|
+| `append_dir` | Summary | Entity-relative summary output directory |
+| `max_tokens` | Summary | Default source chunk token budget |
+| `records_append_dir` | Records | Optional entity-relative records output directory |
+| `records_max_tokens` | Records | Default records source chunk budget |
+| `num_ctx` | Both | Provider model context setting and chunk-size guard |
+
+If `records_append_dir` is absent, records default to `records/<sanitized-model-name>`.
+
+### Summary model precedence
+
+```text
+--model
+→ entity summarization_model
+→ system default_summarization_model
+```
+
+### Records model precedence
+
+```text
+--model
+→ entity records_model
+→ entity summarization_model
+→ system default_records_model
+→ system default_summarization_model
+```
+
+Records can therefore start with the summary model configuration and later move to a dedicated model without changing the command contract.
+
+## Provider configuration and security
+
+Supported provider names include:
 
 ```text
 ollama
@@ -595,226 +193,101 @@ anthropic
 codex_cli
 ```
 
-Provider hardening defaults:
+Provider access is a trust boundary:
 
-- loopback HTTP is allowed only through `llm_allow_loopback_http`
-- off-box provider targets require `llm_allow_remote=true`
-- non-loopback plain HTTP additionally requires `llm_allow_insecure_http=true`
-- custom executable targets require `llm_allow_custom_executable=true`
+| Target | Required setting |
+|---|---|
+| Local `http://localhost` or `127.0.0.1` | `llm_allow_loopback_http=true` |
+| Remote HTTPS | `llm_allow_remote=true` |
+| Remote plain HTTP | `llm_allow_remote=true` and `llm_allow_insecure_http=true` |
+| Custom CLI executable | `llm_allow_custom_executable=true` |
 
-Common provider postures:
+Do not relax provider policy only to suppress an error. Confirm the target and transport first.
 
-| Use case | Provider URL | Required flags |
-|---|---|---|
-| Local Ollama | `http://localhost:11434` | `llm_allow_loopback_http=true` |
-| LAN Ollama | `http://192.168.x.x:11434` | `llm_allow_remote=true`, `llm_allow_insecure_http=true` |
-| Hosted API | `https://...` | `llm_allow_remote=true` |
-| CLI-backed provider | `codex` | default executable allowed; custom executable requires `llm_allow_custom_executable=true` |
-
----
-
-# Pricing Reference Settings
-
-YATSEE can estimate what a local run might have cost through a hosted provider.
+Prefer environment variables for secrets:
 
 ```toml
+[system]
+llm_api_key_env = "OPENAI_API_KEY"
+```
+
+The CLI accepts `--llm-api-key`, but shell history and process listings make it a weaker choice.
+
+## Pricing reference
+
+```toml
+[system]
 show_pricing = true
 pricing_provider = "openai"
 pricing_model = "gpt-5.4"
 ```
 
-This does not change the runtime provider.
+Reference pricing estimates hosted-provider cost from reported token usage. It does not measure local electricity, hardware, or runtime cost and does not change the active provider.
 
----
+## Prompt profiles
 
-# Models
+Project profiles:
 
-Model runtime settings live under `[models]`.
-
-```toml
-[models."mistral-nemo:latest"]
-append_dir = "summary_nemo"
-max_tokens = 2500
-num_ctx = 16384
+```text
+prompts/<profile>/
+├── classifier.toml
+├── prompts.toml
+└── records_prompt.toml
 ```
 
-`append_dir` controls the model-associated output directory. `max_tokens` and `num_ctx` control chunking and context behavior depending on stage use.
+Entity-local overrides:
 
----
-
-# Prompt Profiles
-
-Prompt profiles live outside the main config and are selected during intelligence runs. Profiles should use the shared profile/routing mechanism rather than one-off processing paths.
-
-```bash
-yatsee intel summarize \
-  -e example_entity \
-  --job-profile civic
+```text
+data/<entity>/prompts/<profile>/
+├── classifier.toml
+├── prompts.toml
+└── records_prompt.toml
 ```
 
-Validate prompt/profile wiring with:
+Each file resolves independently using entity-local then project precedence. An entity may override only the file it needs.
+
+- `classifier.toml` is shared by summary and records.
+- `prompts.toml` owns summary routing and optional density keywords.
+- `records_prompt.toml` owns records extraction routing.
+
+The summary and classifier loaders have built-in fallbacks for non-strict runtime use. Records intentionally has no fallback and fails if its sidecar is missing.
+
+Validate classifier and summary wiring:
 
 ```bash
-yatsee intel prompts validate
-yatsee intel prompts validate --entity example_entity
-yatsee intel prompts validate --profile civic
+yatsee intel prompts validate -j civic
+yatsee intel prompts validate -e example_board -j civic
 yatsee intel prompts validate --all
 ```
 
-Use `--all` when you intentionally want to surface every discovered profile, including unfinished or broken bundles.
-
----
-
-# Entity Configuration: What Usually Needs Editing
-
-Required or near-required:
-
-```text
-[settings]
-[media]
-```
-
-High-value refinements:
-
-```text
-[divisions]
-[titles]
-[people]
-[entities]
-[replacements]
-```
-
-Usually leave alone unless needed:
-
-```text
-model overrides
-LLM provider settings
-pricing settings
-```
-
-Practical order:
-
-1. Add entity
-2. Init local config
-3. Place raw media in the configured media input directory
-4. Correct `entity_type`, `entity_level`, and `location`
-5. Validate and resolve
-6. Run a limited data batch
-7. Review transcripts and summaries
-8. Add replacements and local names
-9. Rerun normalization, summaries, and signals as needed
-
----
-
-# Operational Notes
-
-- Keep entity handles stable.
-- Use lowercase handles with underscores.
-- Keep media paths minimal and explicit.
-- Start with empty people/division lists if needed.
-- Add replacements only for recurring mistakes.
-- Validate before long runs.
-- Use `config resolve` when behavior does not match expectations.
-- Treat entity config as part of output quality.
-- Do not tune prompts or LLMs before confirming transcript quality.
-
----
-
-# Example: Add a County Board Entity
+Load and inspect records routing:
 
 ```bash
-yatsee config entity add \
-  --display-name "Example County Board" \
-  --entity example_county_board \
-  --base "country.US.state.EX."
-
-yatsee config init --entity example_county_board
-nano data/example_county_board/config.toml
+yatsee intel records -e example_board -j civic --print-prompts
 ```
 
-Minimal local config target:
+## Path behavior
 
-```toml
-[settings]
-entity_type = "county_board"
-entity_level = "county"
-location = "Example County, Example State"
-data_path = "./data/example_county_board"
-notes = "Example County Board public meeting recordings."
-
-[media]
-input_dir = "downloads"
-audio_dir = "audio"
-
-[divisions]
-type = "districts"
-names = []
-
-[titles]
-board = ["County Board", "Board Member", "Chair", "Vice Chair"]
-county_clerk = ["County Clerk", "Clerk"]
-administration = ["County Administrator", "County Manager"]
-staff = ["Director", "Coordinator", "Treasurer", "Sheriff", "State's Attorney", "Engineer", "Assessor"]
-
-[people.board_members]
-
-[people.staff]
-
-[people.legacy]
-
-[entities]
-third_parties = ["Consultant", "Engineer", "Auditor", "Applicant"]
-
-[replacements]
-"Common Bad Transcription" = "Correct Local Term"
-```
-
-Process:
-
-```bash
-yatsee config validate --entity example_county_board
-yatsee config resolve --entity example_county_board
-yatsee audio format -e example_county_board
-yatsee audio transcribe -e example_county_board --faster
-yatsee transcript slice -e example_county_board --force
-yatsee transcript normalize -e example_county_board --force
-yatsee intel summarize -e example_county_board
-yatsee intel signals -e example_county_board
-```
-
-Inspect outputs:
-
-```bash
-find data/example_county_board/transcripts_medium -name '*.vtt' | wc -l
-find data/example_county_board/normalized -name '*.txt' | wc -l
-find data/example_county_board/summary_nemo -name '*.md' | wc -l
-find data/example_county_board/meeting_signals -name '*.signals.md' | wc -l
-```
-
----
-
-# Final Guidance
-
-Most users do not need to tune every field.
-
-The highest-value work is:
-
-- define the entity clearly
-- place raw media in the configured input directory
-- validate before long runs
-- keep local provider security defaults intact
-- add real local names, legacy people, entities, and roles over time
-- add replacements for recurring transcript errors
-- confirm transcript quality before relying on summaries
-
-YATSEE works best when the boring layers are solid:
+Entity-backed intelligence runs default to:
 
 ```text
-raw media
-audio
-VTT
-plain text
-normalized text
-summary / signals
-search / retrieval / publishing
+input:  data/<entity>/normalized/
+summary output: configured model append_dir
+records output: configured records_append_dir or records/<model>/
 ```
+
+Without an entity, commands require explicit input and output paths. Paths used for destructive or generated operations are resolved and checked through shared path helpers.
+
+## Practical configuration workflow
+
+1. Register and initialize the entity.
+2. Correct identity, `data_path`, and media paths.
+3. Validate and inspect resolved configuration.
+4. Process a small sample.
+5. Review audio and transcripts.
+6. Add only proven local names, entities, and replacements.
+7. Configure summary and records models.
+8. Validate prompt profiles.
+9. Run larger batches.
+
+Configuration should clarify behavior, not become a catalog of every observed person or transcription mistake.

@@ -1,340 +1,156 @@
 # YATSEE Pipeline Overview
 
-YATSEE is a modular, local-first pipeline for processing long-form meeting media into auditable local artifacts.
+YATSEE is a staged, local-first media processing pipeline. Each stage produces explicit files that can be inspected, compared, and reused without rerunning the entire workflow.
 
-The current system is organized around three broad layers:
-
-```text
-supply media
-  ↓
-format → transcribe → optional QA → slice → normalize → summarize / extract signals
-  ↓
-index → search / investigate
-```
-
-YATSEE core owns the middle processing layer. Acquisition, hosted upload handling, publication, and downstream search can be handled by adjacent tools or applications that hand off local files or explicit artifact references.
-
-
-## Current Operating Scope
-
-The supported local workflow is staged media processing: raw media is supplied locally, processed through staged audio/transcript/intelligence commands, and written back as inspectable filesystem artifacts.
-
-Current first-class intelligence commands are:
-
-```bash
-yatsee intel summarize -e <entity>
-yatsee intel signals -e <entity>
-yatsee intel prompts validate
-```
-
-`yatsee intel run` remains a compatibility alias for `yatsee intel summarize`. Intelligence workflows are profile-driven; additional profiles should extend the shared profile/routing mechanism rather than creating one-off processing paths.
-
----
-
-## Process Flow
-
-![process_flow](./assets/yatsee_process_flow.png)
-
-## Top-Level Flow
+## Architecture
 
 ```text
-downloads/
-  ↓
-audio/
-  ↓
-transcripts_<model>/
-  ↓
-optional transcript QA
-  ↓
-normalized/
-  ↓
-summary_<model>/ and meeting_signals/
-  ↓
-yatsee_db/ or external search/index tooling
+compatible local media
+  → normalized audio
+  → VTT transcript
+  → sliced TXT and optional segment JSONL
+  → normalized transcript
+  ├── summary
+  ├── structured records
+  └── optional embeddings, indexing, search, or publication
 ```
 
-Each stage can be run independently when the expected input artifacts exist.
+Source acquisition is handled outside YATSEE core. Compatible local media can come from `yatsee-fetch`, a recorder, an upload workflow, an archive, or a manual copy.
 
----
+## Pipeline stages
 
-## Package and CLI Shape
+| Stage | Command | Primary input | Primary output |
+|---|---|---|---|
+| Configure | `yatsee config ...` | Global and entity TOML | Resolved runtime configuration |
+| Format | `yatsee audio format` | Audio or video media | Mono 16 kHz WAV or FLAC |
+| Transcribe | `yatsee audio transcribe` | Normalized audio | VTT transcript |
+| Slice | `yatsee transcript slice` | VTT | TXT and optional segment JSONL |
+| Normalize | `yatsee transcript normalize` | Transcript TXT | Clean normalized TXT |
+| Summarize | `yatsee intel summarize` | Normalized TXT | Markdown or YAML summary |
+| Records | `yatsee intel records` | Normalized TXT | Structured JSON records and deterministic Markdown view |
 
-YATSEE is packaged as a Python CLI application.
+Each processing command can accept an entity or explicit input and output paths. Entity-backed runs use the configured entity data directory.
 
-Current CLI organization:
+## Entity artifact layout
 
-```text
-src/yatsee/
-  __main__.py
-  cli/
-    main.py
-    config.py
-    audio.py
-    transcript.py
-    intel.py
-  audio/
-  transcript/
-  intel/
-  providers/
-  core/
-  config_tools/
-```
-
-Supported entrypoints:
-
-```bash
-yatsee --help
-python -m yatsee --help
-```
-
-Command families:
-
-```text
-yatsee config ...
-yatsee audio ...
-yatsee transcript ...
-yatsee intel ...
-```
-
-The CLI layer translates terminal arguments into stage function calls. Stage logic lives in package modules, not in the parser files.
-
----
-
-## Entity Data Layout
-
-YATSEE stores artifacts under one directory per configured entity.
-
-General shape:
+A typical entity directory looks like:
 
 ```text
 data/<entity>/
-  config.toml
-  downloads/
-  audio/
-  transcripts_<model>/
-  normalized/
-  summary_<model>/
-  meeting_signals/
-  yatsee_db/
+├── config.toml
+├── downloads/
+├── audio/
+├── transcripts_<model>/
+├── normalized/
+├── summary_<model>/
+├── records/
+│   └── <model>/
+└── yatsee_db/              # optional indexing/search data
 ```
 
-Directory roles:
+Model-specific directories preserve provenance. Custom model configuration may use different summary or records directory names.
 
-| Directory | Purpose |
+## Intelligence workflows
+
+### Summaries
+
+```text
+classify meeting
+  → select first / multi / final prompt route
+  → extract chunk summaries
+  → reduce again only when needed
+  → final LLM synthesis
+```
+
+Summary output is designed for readability. It may combine related facts and reorganize content according to the selected profile.
+
+### Records
+
+```text
+classify meeting
+  → select one meeting-specific extraction prompt
+  → extract JSON records from each chunk once
+  → parse and validate each chunk
+  → deterministically remove exact duplicates
+  → write final records JSON
+  → render an itemized Markdown view
+```
+
+Records do not use summary reductions or an LLM consolidation pass. Similar, conflicting, or uncertain records remain separate unless they are exact normalized duplicates.
+
+The final artifact contains run metadata and records with:
+
+```text
+record_type
+subject
+summary
+evidence
+attribution         optional
+attributes          optional
+source_chunks
+```
+
+Raw provider responses and parsed chunk artifacts are retained beside the final JSON. Invalid chunk output is written to the `errors/` directory; later chunks continue and the attempt is marked partial.
+
+The final JSON includes the normalized transcript hash and an extraction fingerprint covering the model, prompts, profile, chunking settings, and relevant entity context. Compatible artifacts are reused without invoking the model, while the Markdown view is regenerated directly from JSON. Partial attempts are written separately and do not replace a previous complete artifact.
+
+## Prompt profile layout
+
+```text
+prompts/<profile>/
+├── classifier.toml
+├── prompts.toml
+└── records_prompt.toml
+```
+
+| File | Responsibility |
 |---|---|
-| `config.toml` | Entity-local configuration. |
-| `downloads/` | Provider-neutral raw media input. Often produced by acquisition tools. |
-| `audio/` | Formatted 16 kHz mono transcription-ready audio. |
-| `transcripts_<model>/` | Transcription outputs for a specific transcription model. |
-| `normalized/` | Cleaned transcript text for intelligence and indexing stages. |
-| `summary_<model>/` | Summary outputs for a specific summarization model. |
-| `meeting_signals/` | Deterministic signal artifacts extracted from normalized transcripts. |
-| `yatsee_db/` | Optional or experimental index/search storage. |
+| `classifier.toml` | Allowed meeting types and classifier prompt |
+| `prompts.toml` | Summary prompts, routes, and optional density keywords |
+| `records_prompt.toml` | Records extraction prompts and meeting-type routes |
 
-Model-specific directories intentionally encode provenance. For example, `transcripts_medium/` and `summary_nemo/` identify the model family used to produce those artifacts.
+Entity-local profile files under `data/<entity>/prompts/<profile>/` take precedence over project files.
 
-Temporary comparison directories may also exist during development, such as:
+## Configuration flow
 
 ```text
-transcripts_medium_en/
-summary_nemo_bak/
-transcripts_medium_old/
+yatsee.toml
+  + data/<entity>/config.toml
+  → merged runtime configuration
+  → stage-specific path, model, provider, and prompt resolution
 ```
 
-These are useful for comparing models, prompt changes, or processing changes against prior outputs.
+Config inspection redacts secret-like fields by default. Provider security checks distinguish loopback HTTP, remote HTTPS, remote plain HTTP, and custom executables.
 
----
-
-## 1. Raw Media Intake
-
-- **Input:** compatible media files supplied by an external tool, recorder, upload, copy, or manual import
-- **Default location:** `downloads/`
-- **Config:** `[media].input_dir`
-- **CLI override:** `yatsee audio format --input-dir <path>`
-
-YATSEE core does not need to know whether raw media came from YouTube, a recorder, an upload, an archive, or a local filesystem.
-
----
-
-## 2. Audio Formatting
-
-- **Command:** `yatsee audio format`
-- **Input:** raw media from `downloads/`, `[media].input_dir`, or direct CLI path
-- **Output:** normalized `.wav` or `.flac` in `audio/`
-- **Tooling:** `ffmpeg`, `ffprobe`
-
-Typical output:
-
-```text
-mono
-16 kHz
-.flac or .wav
-```
-
-The stage supports chunked output, overlap, dry-run, and force modes.
-
----
-
-## 3. Transcription
-
-- **Command:** `yatsee audio transcribe`
-- **Input:** formatted audio from `audio/`
-- **Output:** `.vtt` transcripts in `transcripts_<model>/`
-- **Tooling:** `openai-whisper` or `faster-whisper`
-
-VTT is the primary transcript artifact because it preserves timing.
-
----
-
-## Optional Transcript QA
-
-Experimental helper scripts can inspect VTT outputs before they are sliced, normalized, summarized, or indexed. This is useful for long batch runs where ASR loops or timestamp artifacts can otherwise propagate into downstream artifacts.
-
-This is a separate recovery workflow, not part of the normal happy-path command sequence.
-
-Current helpers:
+## Full local run
 
 ```bash
-python scripts/qa_transcript_report.py --details
-python scripts/qa_transcript_report.py --json qa_report.json
-python scripts/qa_reset_vtt_for_rebuild.py --entity <entity> --qa-report qa_report.json
-```
+yatsee config validate -e <entity>
+yatsee config resolve -e <entity>
 
-If the reset helper selects transcripts for rebuild, rerun transcription with the standard defaults:
-
-```bash
-yatsee audio transcribe \
-  -e <entity> \
-  --faster \
-  --get-chunks
-```
-
-The QA boundary is intentionally strict: ASR loop/content corruption findings are rebuild signals, not fixer targets. Timestamp-only issues may be reported or later repaired by conservative QA fix tooling.
-
----
-
-## 4. Transcript Preparation
-
-### 4a. Slice VTT into TXT and JSONL Segments
-
-- **Command:** `yatsee transcript slice`
-- **Input:** `.vtt` from `transcripts_<model>/`
-- **Output:** `.txt` and optional `.segments.jsonl`
-
-Plain text output feeds normalization. JSONL segments can support retrieval workflows.
-
-### 4b. Normalize Transcript Text
-
-- **Command:** `yatsee transcript normalize`
-- **Input:** `.txt` transcript artifacts
-- **Output:** cleaned `.txt` in `normalized/`
-
-Normalized text is the preferred input for summarization, signal extraction, and search indexing.
-
----
-
-## 5. Intelligence and Summarization
-
-- **Command:** `yatsee intel summarize`
-- **Input:** normalized `.txt`
-- **Output:** `.md` or `.yaml` summaries in `summary_<model>/` or a configured output directory
-- **Tooling:** provider-based LLM execution
-
-The intelligence stage supports multi-pass summarization, automatic meeting classification, prompt routing, local and hosted LLM providers, optional reference pricing, and provider-target hardening.
-
-Provider backends may include:
-
-```text
-ollama
-llamacpp
-openai
-anthropic
-codex_cli
-```
-
-Provider trust boundaries are enforced before model execution:
-
-| Target type | Required setting | Notes |
-|---|---|---|
-| Loopback HTTP, such as `http://localhost:11434` | `llm_allow_loopback_http=true` | Intended for local Ollama/llama.cpp. |
-| Remote HTTPS | `llm_allow_remote=true` | Intended for hosted APIs or explicitly trusted remote services. |
-| Remote/LAN HTTP | `llm_allow_remote=true` and `llm_allow_insecure_http=true` | Use only for trusted LAN/VPN-style model servers. |
-| Custom CLI executable | `llm_allow_custom_executable=true` | Applies to CLI-backed providers such as `codex_cli`. |
-
-
----
-
-## 6. Deterministic Meeting Signals
-
-- **Command:** `yatsee intel signals`
-- **Input:** normalized `.txt`
-- **Output:** `.signals.md` artifacts in `meeting_signals/`
-- **Tooling:** deterministic text extraction
-
-Signals are mechanical evidence candidates. They are not official minutes and not final meeting records.
-
-Typical signal categories include:
-
-```text
-actions
-roll calls
-money references
-civic objects
-questions
-people mentions
-low-confidence lines
-```
-
----
-
-## Optional Downstream Workflows
-
-### Index Data
-
-- **Current script/prototype:** `examples/yatsee_index_data.py`
-- **Input:** normalized transcript text, summaries, and optional segment artifacts
-- **Output:** vector database files, often under `yatsee_db/`
-
-### Search / Investigation
-
-- **Current script/prototype:** `examples/yatsee_search_demo.py`
-- **Input:** normalized text, summaries, and indexed retrieval artifacts
-- **Tooling:** Streamlit plus ChromaDB-backed retrieval
-
-Indexing and search consume core pipeline outputs. They are not required for the main audio-to-summary workflow and may eventually become a separate package or application.
-
----
-
-## Running the Pipeline
-
-```bash
 yatsee audio format -e <entity>
-yatsee audio transcribe -e <entity>
-yatsee transcript slice -e <entity>
-yatsee transcript normalize -e <entity>
+yatsee audio transcribe -e <entity> --faster
+yatsee transcript slice -e <entity> --force
+yatsee transcript normalize -e <entity> --force
+
 yatsee intel summarize -e <entity>
-yatsee intel signals -e <entity>
+yatsee intel records -e <entity> -j civic
 ```
 
-Command summary:
+## Trust boundaries
 
-| Command | Purpose |
-|---|---|
-| `yatsee config ...` | Manage and inspect configuration. |
-| `yatsee audio format -e <entity>` | Convert raw media to normalized audio. |
-| `yatsee audio transcribe -e <entity>` | Transcribe audio files to VTT. |
-| `yatsee transcript slice -e <entity>` | Slice VTT into transcript text and structured segments. |
-| `yatsee transcript normalize -e <entity>` | Clean and normalize transcript text. |
-| `yatsee intel summarize -e <entity>` | Generate summaries through the configured provider. |
-| `yatsee intel signals -e <entity>` | Generate deterministic meeting signal artifacts. |
+- Media files are untrusted input to `ffmpeg`, transcription engines, and parsers.
+- Transcript and model output are untrusted generated content.
+- Provider URLs and CLI executables are explicit trust decisions.
+- Summary and record artifacts should be checked against source evidence before official or high-stakes use.
+- Deterministic mechanics should remain separate from probabilistic extraction and synthesis.
 
----
+## Scope boundaries
 
-## Design Principles
+YATSEE core owns media-to-artifact processing. The following remain adjacent unless explicitly integrated:
 
-- **Modular stages:** each stage has a clear input/output contract.
-- **Local-first processing:** cloud APIs are optional, not required for the core workflow.
-- **Inspectable artifacts:** filesystem outputs are explicit and reusable.
-- **Entity-specific context:** local config improves names, replacements, and output quality.
-- **Provider abstraction:** LLM runtime choice does not redefine the summarization workflow.
-- **Loose coupling:** acquisition, processing, and search/indexing are connected by files.
+- media acquisition and provider-specific fetching
+- hosted accounts, billing, and upload UX
+- publication and public archive workflows
+- production search interfaces
+- downstream investigative analysis

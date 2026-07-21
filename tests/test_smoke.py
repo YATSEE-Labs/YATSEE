@@ -13,11 +13,14 @@ import unittest
 from pathlib import Path
 
 from yatsee.cli.main import build_parser
-from yatsee.config_tools.resolve import redact_config
 from yatsee.core.errors import ConfigError, ValidationError
+from yatsee.core.config import redact_sensitive_config
 from yatsee.config_tools.validate import validate_entity_config, validate_global_config
 from yatsee.core.paths import get_entity_dir, resolve_contained_path
-from yatsee.intel.prompts import discover_prompt_profiles, load_prompt_bundle
+from yatsee.intel.prompts import (
+    discover_summary_prompt_profiles,
+    load_summary_prompt_bundle,
+)
 from yatsee.providers.base import ProviderConfigError
 from yatsee.providers.security import validate_provider_target
 
@@ -50,6 +53,13 @@ class CliSmokeTests(unittest.TestCase):
         args = parser.parse_args(["intel", "summarize", "--job-profile", "custom-profile"])
         self.assertEqual(args.job_profile, "custom-profile")
         self.assertTrue(callable(args.handler))
+
+        args = parser.parse_args(["intel", "records"])
+        self.assertEqual(args.chunk_style, "density")
+        self.assertTrue(callable(args.handler))
+
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["intel", "signals"])
 
 
 class ProviderSecurityTests(unittest.TestCase):
@@ -104,7 +114,7 @@ class ConfigSafetyTests(unittest.TestCase):
         """
         Secret values should not appear in resolved config output by default.
         """
-        redacted = redact_config(
+        redacted = redact_sensitive_config(
             {
                 "system": {
                     "llm_api_key": "sk-test",
@@ -177,7 +187,11 @@ class PromptBundleTests(unittest.TestCase):
         previous_cwd = Path.cwd()
         try:
             os.chdir(repo_root)
-            bundle = load_prompt_bundle({}, "civic", require_prompt_file=True)
+            bundle = load_summary_prompt_bundle(
+                {},
+                "civic",
+                require_prompt_file=True,
+            )
         finally:
             os.chdir(previous_cwd)
 
@@ -190,7 +204,7 @@ class PromptBundleTests(unittest.TestCase):
         Profile names should not be able to escape the prompt root.
         """
         with self.assertRaises(ConfigError):
-            load_prompt_bundle({}, "../outside")
+            load_summary_prompt_bundle({}, "../outside")
 
     def test_prompt_profile_discovery_is_filesystem_based(self) -> None:
         """
@@ -200,7 +214,7 @@ class PromptBundleTests(unittest.TestCase):
         previous_cwd = Path.cwd()
         try:
             os.chdir(repo_root)
-            profiles = discover_prompt_profiles({})
+            profiles = discover_summary_prompt_profiles({})
         finally:
             os.chdir(previous_cwd)
 

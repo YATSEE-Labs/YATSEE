@@ -20,6 +20,43 @@ from yatsee.core.paths import get_entity_config_path, get_root_data_dir
 
 GLOBAL_CONFIG_PATH = "yatsee.toml"
 RESERVED_LOCAL_KEYS = {"settings", "meta"}
+SENSITIVE_KEY_PARTS = (
+    "authorization",
+    "credential",
+    "key",
+    "password",
+    "secret",
+    "token",
+)
+
+
+def redact_sensitive_config(value: Any) -> Any:
+    """
+    Recursively redact sensitive-looking configuration values.
+
+    Redaction is key-name based so newly added secret settings are protected by
+    default when configuration is rendered for operator inspection. Environment
+    variable reference names remain visible because they identify where a secret
+    is loaded without exposing the secret value itself.
+
+    :param value: Configuration value to redact
+    :return: Redacted configuration value
+    """
+    if isinstance(value, dict):
+        redacted: Dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key).lower()
+            is_sensitive = any(part in key_text for part in SENSITIVE_KEY_PARTS)
+            if is_sensitive and not key_text.endswith("_env"):
+                redacted[key] = "***REDACTED***" if item else item
+            else:
+                redacted[key] = redact_sensitive_config(item)
+        return redacted
+
+    if isinstance(value, list):
+        return [redact_sensitive_config(item) for item in value]
+
+    return value
 
 
 def load_global_config(path: str = GLOBAL_CONFIG_PATH) -> Dict[str, Any]:

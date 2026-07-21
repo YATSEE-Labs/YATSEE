@@ -2,7 +2,7 @@
 CLI command registration and handlers for YATSEE intelligence commands.
 
 This module owns the `yatsee intel ...` command group, including multi-pass
-summarization and deterministic signal extraction.
+summarization and structured records extraction.
 """
 
 from __future__ import annotations
@@ -32,6 +32,13 @@ def register_intel_commands(subparsers: argparse._SubParsersAction) -> None:
     _add_summarize_arguments(summarize_parser)
     summarize_parser.set_defaults(handler=handle_intel_run)
 
+    records_parser = intel_subparsers.add_parser(
+        "records",
+        help="Extract structured civic records from transcripts",
+    )
+    _add_records_arguments(records_parser)
+    records_parser.set_defaults(handler=handle_intel_records)
+
     prompts_parser = intel_subparsers.add_parser("prompts", help="Prompt bundle utilities")
     prompts_subparsers = prompts_parser.add_subparsers(dest="prompt_command")
 
@@ -54,17 +61,6 @@ def register_intel_commands(subparsers: argparse._SubParsersAction) -> None:
         help="Validate all discovered filesystem-backed prompt profiles",
     )
     prompt_validate_parser.set_defaults(handler=handle_intel_prompts_validate)
-
-    intel_signals_parser = intel_subparsers.add_parser(
-        "signals",
-        help="Generate deterministic meeting signal artifacts",
-    )
-    intel_signals_parser.add_argument("-e", "--entity", help="Entity handle to process")
-    intel_signals_parser.add_argument("-i", "--input-path", help="Normalized TXT file or directory")
-    intel_signals_parser.add_argument("-o", "--output-dir", help="Directory to save meeting signal artifacts")
-    intel_signals_parser.add_argument("--force", action="store_true", help="Overwrite existing outputs")
-    intel_signals_parser.set_defaults(handler=handle_intel_signals)
-
 
 def _add_summarize_arguments(parser: argparse.ArgumentParser) -> None:
     """
@@ -135,6 +131,56 @@ def _add_summarize_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+
+def _add_records_arguments(parser: argparse.ArgumentParser) -> None:
+    """
+    Register records extraction arguments.
+
+    CLI argument grouping is intentionally deferred until summary and records
+    have both stabilized enough to reveal their durable overlap.
+
+    :param parser: Records subparser to configure
+    :return: None
+    """
+    parser.add_argument("-e", "--entity", help="Entity handle to process")
+    parser.add_argument("-i", "--txt-input", help="Path to a transcript file or directory (.txt)")
+    parser.add_argument("-o", "--output-dir", help="Directory to save record artifacts")
+    parser.add_argument("-m", "--model", help="LLM model override")
+    parser.add_argument("--llm-provider", help="LLM provider override")
+    parser.add_argument("--llm-provider-url", help="LLM provider URL or executable target override")
+    parser.add_argument(
+        "--llm-api-key",
+        help="LLM API key override; prefer llm_api_key_env or YATSEE_LLM_API_KEY",
+    )
+    parser.add_argument("--show-pricing", action="store_true", help="Estimate reference pricing for the run")
+    parser.add_argument("--no-show-pricing", action="store_true", help="Disable configured reference pricing")
+    parser.add_argument("--pricing-provider", help="Reference provider for pricing")
+    parser.add_argument("--pricing-model", help="Reference model for pricing")
+    parser.add_argument("-j", "--job-profile", default="civic", help="Prompt/profile name")
+    parser.add_argument(
+        "-s",
+        "--chunk-style",
+        choices=["word", "sentence", "density"],
+        default="density",
+        help="Chunk boundary method",
+    )
+    parser.add_argument("-w", "--max-words", type=int, help="Approximate words per chunk")
+    parser.add_argument("-t", "--max-tokens", type=int, help="Approximate max tokens per chunk")
+    parser.add_argument(
+        "-d",
+        "--disable-auto-classification",
+        action="store_true",
+        help="Use the general records route without model classification",
+    )
+    parser.add_argument("--meeting-type", help="Explicit records meeting-type route")
+    parser.add_argument("--context", default="", help="Optional human-readable meeting context")
+    parser.add_argument("--print-prompts", action="store_true", help="Print records prompts and exit")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Bypass compatible records reuse and rerun extraction",
+    )
+
 def handle_intel_run(args: argparse.Namespace) -> int:
     """
     Run the intelligence summarization stage.
@@ -142,9 +188,35 @@ def handle_intel_run(args: argparse.Namespace) -> int:
     :param args: Parsed CLI arguments
     :return: Process exit code
     """
-    from yatsee.intel.runner import run_intelligence_stage
+    from yatsee.intel.runner import run_summary_stage
 
-    result = run_intelligence_stage(args)
+    result = run_summary_stage(
+        global_config_path=args.config,
+        entity=args.entity,
+        input_path=args.txt_input,
+        output_dir=args.output_dir,
+        model=args.model,
+        llm_provider=args.llm_provider,
+        llm_provider_url=args.llm_provider_url,
+        llm_api_key=args.llm_api_key,
+        show_pricing=args.show_pricing,
+        no_show_pricing=args.no_show_pricing,
+        pricing_provider=args.pricing_provider,
+        pricing_model=args.pricing_model,
+        output_format=args.output_format,
+        job_profile=args.job_profile,
+        chunk_style=args.chunk_style,
+        max_words=args.max_words,
+        max_tokens=args.max_tokens,
+        max_pass=args.max_pass,
+        disable_auto_classification=args.disable_auto_classification,
+        first_prompt=args.first_prompt,
+        second_prompt=args.second_prompt,
+        final_prompt=args.final_prompt,
+        context=args.context,
+        print_prompts=args.print_prompts,
+        enable_chunk_writer=args.enable_chunk_writer,
+    )
 
     if result.get("mode") == "print_prompts":
         print(f"Job profile: {result['job_profile']}")
@@ -209,7 +281,11 @@ def handle_intel_prompts_validate(args: argparse.Namespace) -> int:
     :return: Process exit code
     """
     from yatsee.core.config import load_entity_config, load_global_config
-    from yatsee.intel.prompts import discover_prompt_profiles, load_prompt_bundle
+    from yatsee.intel.prompts import (
+        discover_summary_prompt_profiles,
+        load_classifier_bundle,
+        load_summary_prompt_bundle,
+    )
 
     entity_cfg = {}
     if args.entity:
@@ -217,14 +293,21 @@ def handle_intel_prompts_validate(args: argparse.Namespace) -> int:
         entity_cfg = load_entity_config(global_cfg, args.entity)
 
     if args.all:
-        profiles = discover_prompt_profiles(entity_cfg)
+        profiles = discover_summary_prompt_profiles(entity_cfg)
         if not profiles:
             print("No filesystem-backed prompt profiles discovered.")
             return 1
 
         for profile in profiles:
-            bundle = load_prompt_bundle(entity_cfg, profile, require_prompt_file=True)
+            classifier_bundle = load_classifier_bundle(
+                entity_cfg,
+                profile,
+                require_prompt_file=True,
+            )
+            bundle = load_summary_prompt_bundle(entity_cfg, profile, require_prompt_file=True)
             print(f"Job profile: {profile}")
+            print(f"Classifier file: {classifier_bundle['path']}")
+            print(f"Classifier types: {len(classifier_bundle['allowed_meeting_types'])}")
             print(f"Prompt file: {bundle['path']}")
             print(f"Prompts: {len(bundle['prompts'])}")
             print(f"Routes: {len(bundle['prompt_router'])}")
@@ -233,9 +316,16 @@ def handle_intel_prompts_validate(args: argparse.Namespace) -> int:
         print(f"Prompt bundle validation passed for {len(profiles)} profile(s).")
         return 0
 
-    bundle = load_prompt_bundle(entity_cfg, args.job_profile, require_prompt_file=True)
+    classifier_bundle = load_classifier_bundle(
+        entity_cfg,
+        args.job_profile,
+        require_prompt_file=True,
+    )
+    bundle = load_summary_prompt_bundle(entity_cfg, args.job_profile, require_prompt_file=True)
 
     print(f"Job profile: {args.job_profile}")
+    print(f"Classifier file: {classifier_bundle['path']}")
+    print(f"Classifier types: {len(classifier_bundle['allowed_meeting_types'])}")
     print(f"Prompt file: {bundle['path']}")
     print(f"Used fallback prompts: {bundle['fallback']}")
     print(f"Prompts: {len(bundle['prompts'])}")
@@ -244,50 +334,92 @@ def handle_intel_prompts_validate(args: argparse.Namespace) -> int:
     return 0
 
 
-def handle_intel_signals(args: argparse.Namespace) -> int:
+def handle_intel_records(args: argparse.Namespace) -> int:
     """
-    Run deterministic meeting-signal extraction and print a compact stage report.
-
-    The signal stage emits mechanical evidence candidates from normalized
-    transcript text. It does not produce final meeting records or official
-    minutes.
+    Run structured records extraction and print a compact stage report.
 
     :param args: Parsed CLI arguments
     :return: Process exit code
     """
-    from yatsee.intel.signals import run_signals_stage
+    from yatsee.intel.record import run_records_stage
 
-    result = run_signals_stage(
+    result = run_records_stage(
         global_config_path=args.config,
         entity=args.entity,
-        input_path=args.input_path,
+        input_path=args.txt_input,
         output_dir=args.output_dir,
+        model=args.model,
+        llm_provider=args.llm_provider,
+        llm_provider_url=args.llm_provider_url,
+        llm_api_key=args.llm_api_key,
+        show_pricing=args.show_pricing,
+        no_show_pricing=args.no_show_pricing,
+        pricing_provider=args.pricing_provider,
+        pricing_model=args.pricing_model,
+        job_profile=args.job_profile,
+        chunk_style=args.chunk_style,
+        max_words=args.max_words,
+        max_tokens=args.max_tokens,
+        disable_auto_classification=args.disable_auto_classification,
+        meeting_type=args.meeting_type,
+        context=args.context,
+        print_prompts=args.print_prompts,
         force=args.force,
     )
 
-    print(f"Input path: {result['input_path']}")
-    print(f"Output directory: {result['output_dir']}")
-    print(f"Discovered files: {result['discovered']}")
-    print(f"Written files: {result['written']}")
-    print(f"Skipped files: {result['skipped']}")
+    if result.get("mode") == "print_prompts":
+        print(f"Job profile: {result['job_profile']}")
+        print(f"Prompt file: {result['prompt_file']}")
+        print()
+        for meeting_type, prompt_id in sorted(result["records_router"].items()):
+            print(f"{meeting_type}: {prompt_id}")
+        print()
+        for prompt_id, prompt_text in result["prompts"].items():
+            print(f"=== {prompt_id} ===")
+            print(prompt_text)
+            print()
+        return 0
 
-    count_fields = (
-        ("action_count", "Action signals"),
-        ("roll_call_count", "Roll call signals"),
-        ("money_count", "Money signals"),
-        ("civic_object_count", "Civic object signals"),
-        ("question_count", "Question signals"),
-        ("people_count", "People signals"),
-        ("low_confidence_count", "Low-confidence lines"),
-    )
+    print(f"Input directory: {result['input_dir']}")
+    print(f"Output directory: {result['output_dir']}")
+    print(f"Provider: {result['llm_provider']}")
+    print(f"Model: {result['model']}")
+    print(f"Prompt file: {result['prompt_file']}")
+    print(f"Discovered transcripts: {result['discovered']}")
+    print(f"Extracted transcripts: {result['extracted']}")
+    print(f"Reused transcripts: {result['reused']}")
 
     for item in result["results"]:
         print(f"- {item['base_name']}")
-        print(f"  Output: {item['output_path']}")
-        print(f"  Written: {item['written']}")
+        print(f"  JSON: {item['output_path']}")
+        print(f"  Markdown: {item['markdown_path']}")
+        if item.get("reused"):
+            print("  Reused: compatible records artifact")
 
-        for key, label in count_fields:
-            if key in item:
-                print(f"  {label}: {item[key]}")
+        print(f"  Status: {item['status']}")
+        print(f"  Meeting type: {item['meeting_type']}")
+        print(f"  Prompt: {item['prompt_id']}")
+        print(
+            f"  Chunks: {item['successful_chunk_count']}/{item['chunk_count']} "
+            f"successful ({item['partial_chunk_count']} partial, "
+            f"{item['failed_chunk_count']} failed)"
+        )
+        print(f"  Validation issues: {item['validation_issue_count']}")
+        print(f"  Records: {item['record_count']}")
+        print(
+            f"  Tokens: in={item['input_tokens']} "
+            f"out={item['output_tokens']} total={item['total_tokens']}"
+        )
+
+        pricing = item.get("pricing", {})
+        if pricing.get("enabled"):
+            estimated_cost = pricing.get("estimated_cost")
+            reference = (
+                f"{pricing.get('reference_provider')}/{pricing.get('reference_model')}"
+            )
+            if estimated_cost is None:
+                print(f"  Reference pricing: unavailable for {reference}")
+            else:
+                print(f"  Reference pricing ({reference}): ${estimated_cost:.4f}")
 
     return 0

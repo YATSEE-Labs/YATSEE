@@ -1,60 +1,39 @@
 # Transcription Defaults
 
-YATSEE uses conservative transcription defaults for public-meeting audio because
-transcript artifacts can contaminate downstream normalization, summarization,
-search, and record extraction.
+YATSEE uses conservative transcription defaults because ASR errors propagate into normalization, summaries, records, and search.
 
-The `default` transcription profile is the supported baseline for normal runs and
-QA rebuilds.
+## Supported baseline
 
-## Current defaults
+The `default` transcription profile currently uses:
 
-- Previous-text conditioning is disabled.
-- VAD filtering is enabled for Faster-Whisper runs.
-- Entity hotwords remain enabled.
-- Repeated n-gram suppression is disabled.
-- High-confidence hotword/name-list artifacts may be suppressed before VTT output.
-- Lower-confidence transcript issues should be handled by QA review or downstream
-  validation, not aggressive ASR filtering.
+- previous-text conditioning disabled;
+- VAD filtering for Faster-Whisper;
+- entity hotwords enabled;
+- repeated n-gram suppression disabled;
+- narrow suppression of high-confidence hotword or name-list artifacts;
+- QA and rebuild workflows for lower-confidence failures.
 
-These defaults were selected after comparing a small Freeport Township corpus
-against older generated transcripts. The current defaults reduced obvious
-hotword bleed and repeated ASR loops while preserving important procedural
-content such as roll-call and vote fragments.
+These choices reduce repeated loops and isolated hotword bleed without aggressively deleting procedural language.
 
-## Examples
-
-Example of an isolated hotword/name-list artifact that may be suppressed:
+Example of a likely isolated hotword artifact:
 
 ```text
-Altensey, Barb, Barbara, Billie, Altensey, Pat, Patrick, Liz, Mcllwain, Pat, Patty,
+Altensey, Barb, Barbara, Billie, Altensey, Pat, Patrick, Liz...
 ```
 
-Example of procedural meeting content that should be preserved:
+Example of procedural content that must remain:
 
 ```text
 Wilken, Mcllwain, Altensey, Odendahl, Sellers,
 All abstained.
 ```
 
-The first example is an isolated hotword/name-list hallucination. The second is
-meeting procedure split across adjacent transcript segments.
-
-## Rebuilding transcripts
-
-To rebuild transcripts with the current defaults:
+## Rebuild workflow
 
 ```bash
 yatsee audio transcribe -e <entity> --faster --get-chunks
-```
-
-After rebuilding VTT files, regenerate downstream transcript artifacts:
-
-```bash
 yatsee transcript slice -e <entity> --force
 yatsee transcript normalize -e <entity> --force
 ```
 
-The safe transcription behavior is the default. Separate QA transcription
-profiles should only be added when they materially change behavior and are
-documented with their intended tradeoffs.
+Use the QA report and reset helpers for selected rebuilds. Do not repair repeated hallucinated content into plausible text. Retranscribe it.
