@@ -4,59 +4,11 @@ Output writing helpers for YATSEE intelligence jobs.
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
 import mdformat
 import yaml
 
-
-def _safe_path_component(value: str) -> str:
-    """
-    Normalize a filesystem path component into a single safe segment.
-
-    This helper is used when filenames or directory names may be influenced by
-    transcript metadata, configuration, or model output. It prevents traversal
-    sequences, absolute-path tricks, and malformed control characters from
-    affecting where files are written.
-
-    :param value: Raw path component
-    :return: Safe single path segment
-    :raises ValueError: If the component is empty after normalization
-    """
-    normalized = (value or "").replace("\\", "/").strip().strip(".")
-    normalized = normalized.replace("/", "_").replace("\x00", "")
-
-    if not normalized or normalized in {".", ".."}:
-        raise ValueError("Invalid filesystem path component")
-
-    return normalized
-
-
-def _build_contained_path(root_dir: str, *parts: str) -> str:
-    """
-    Build a path that is guaranteed to remain within the given root directory.
-
-    All write destinations should be derived through this helper so output files
-    cannot escape the intended artifact directory even if an upstream value is
-    malformed or unsafe.
-
-    :param root_dir: Intended root directory
-    :param parts: Path components to append under the root
-    :return: Safe absolute path as a string
-    :raises ValueError: If the resolved path escapes the intended root
-    """
-    root_path = Path(root_dir).resolve()
-    candidate = root_path.joinpath(*parts).resolve()
-
-    try:
-        candidate.relative_to(root_path)
-    except ValueError as exc:
-        raise ValueError(
-            f"Refusing to write outside the output directory: {candidate}"
-        ) from exc
-
-    return str(candidate)
+from yatsee.core.io import ensure_directory, write_text
+from yatsee.core.paths import resolve_contained_path, sanitize_path_component
 
 
 def write_summary_file(
@@ -69,7 +21,7 @@ def write_summary_file(
     Write a summary artifact to disk in Markdown or YAML format.
 
     Markdown output includes a generated title header based on the source
-    basename. YAML output stores the generated text under a single `summary`
+    basename. YAML output stores the generated text under a single ``summary``
     key so downstream readers can consume a stable structure.
 
     :param summary: Generated summary content
@@ -77,29 +29,29 @@ def write_summary_file(
     :param output_dir: Directory where the summary file should be written
     :param fmt: Output format, either ``markdown`` or ``yaml``
     :return: Full path to the written summary file
-    :raises OSError: If the directory cannot be created or the file cannot be written
-    :raises ValueError: If an unsupported format is requested
+    :raises ConfigError: If the directory or file cannot be written
+    :raises ValueError: If an unsupported output format is requested
+    :raises ValidationError: If a path component is invalid
     """
     if fmt not in {"markdown", "yaml"}:
         raise ValueError(f"Unsupported summary output format: {fmt}")
 
     extension = "md" if fmt == "markdown" else "yaml"
-    safe_basename = _safe_path_component(basename)
-    output_path = _build_contained_path(
+    safe_basename = sanitize_path_component(basename)
+    output_path = resolve_contained_path(
         output_dir,
         f"{safe_basename}.summary.{extension}",
     )
 
-    os.makedirs(output_dir, exist_ok=True)
+    ensure_directory(output_dir)
 
-    with open(output_path, "w", encoding="utf-8") as handle:
-        if fmt == "markdown":
-            markdown_content = f"# Summary: {basename}\n\n{summary.strip()}\n"
-            formatted_markdown = mdformat.text(markdown_content, options={"number": True})
-            handle.write(formatted_markdown)
-        else:
-            yaml.safe_dump({"summary": summary}, handle, sort_keys=False)
+    if fmt == "markdown":
+        markdown_content = f"# Summary: {basename}\n\n{summary.strip()}\n"
+        content = mdformat.text(markdown_content, options={"number": True})
+    else:
+        content = yaml.safe_dump({"summary": summary}, sort_keys=False)
 
+    write_text(output_path, content)
     return output_path
 
 
@@ -125,12 +77,13 @@ def write_chunk_file(
     :param pass_num: Summarization pass number
     :param chunk_id: One-based chunk number within the pass
     :return: Full path to the written chunk file
-    :raises OSError: If the directory cannot be created or the file cannot be written
+    :raises ConfigError: If the directory or file cannot be written
+    :raises ValidationError: If a path component escapes the output root
     """
-    safe_base_name = _safe_path_component(base_name)
-    safe_meeting_type = _safe_path_component(meeting_type)
+    safe_base_name = sanitize_path_component(base_name)
+    safe_meeting_type = sanitize_path_component(meeting_type)
 
-    chunk_dir = _build_contained_path(
+    chunk_dir = resolve_contained_path(
         output_dir,
         "chunks",
         safe_base_name,
@@ -138,11 +91,8 @@ def write_chunk_file(
         f"pass_{pass_num}",
     )
     chunk_filename = f"{safe_base_name}_part{chunk_id:02d}.txt"
-    chunk_path = _build_contained_path(chunk_dir, chunk_filename)
+    chunk_path = resolve_contained_path(chunk_dir, chunk_filename)
 
-    os.makedirs(chunk_dir, exist_ok=True)
-
-    with open(chunk_path, "w", encoding="utf-8") as handle:
-        handle.write(chunk_text)
-
+    ensure_directory(chunk_dir)
+    write_text(chunk_path, chunk_text)
     return chunk_path

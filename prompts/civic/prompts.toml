@@ -1,4 +1,4 @@
-# prompts/summary/prompts.toml
+# prompts/civic/prompts.toml
 
 # =========================
 # YATSEE Prompt Routing Rules
@@ -10,45 +10,6 @@ finance_committee = { first = "finance_committee_first_pass", multi = "structure
 committee_of_the_whole = { first = "committee_of_the_whole_first_pass", multi = "committee_meeting_structure_preserving", final = "committee_meeting_final" }
 zoning_committee = { first = "zoning_committee_first_pass", multi = "structure_preserving", final = "committee_meeting_final" }
 general = { first = "general_first_pass", multi = "structure_preserving", final = "final_pass_detailed" }
-
-# =========================
-# YATSEE Classifier Allowed Types
-# =========================
-[classifier_types]
-allowed = [
-    "city_council",
-    "finance_committee",
-    "committee_of_the_whole",
-    "zoning_committee",
-    "general"
-]
-
-# =========================
-# YATSEE Classifiy meeting types
-# =========================
-[classifier_prompt]
-text = """
-You are a routing assistant. Classify this meeting to select the correct summary template.
-
-Context: {context}
-
-Transcript Snippet:
-{text}
-
-Based on context and structure of the snippet, classify as **one** of the following categories:
-- city_council
-- finance_committee
-- committee_of_the_whole
-- zoning_committee
-- general
-
-Analysis Rules:
-1. **Finance Priority:** If Context mentions 'Finance', 'Budget', or 'Appropriation', classify as 'finance_committee' (even if it says 'Committee of the Whole').
-2. **COW vs Council:** If Context says 'Committee of the Whole', classify as 'committee_of_the_whole'. Only classify as 'city_council' if the Context indicates a Regular/Special Council meeting.
-3. **Zoning:** If Context mentions 'Zoning' or 'Planning', classify as 'zoning_committee'.
-
-Return only the classification value as plain text. Do not include explanations or additional commentary.
-"""
 
 # =========================
 # YATSEE Density chunk boundry keyword list
@@ -74,7 +35,6 @@ keywords = [
     # Reports / presentation
     "presentation", "report", "update", "summary", "review", "overview"
 ]
-
 
 
 [prompts.city_council_first_pass]

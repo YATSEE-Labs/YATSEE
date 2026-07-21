@@ -16,10 +16,13 @@ from yatsee.config_tools.entity import (
     purge_entity,
     remove_entity,
 )
-from yatsee.config_tools.resolve import resolve_config
 from yatsee.config_tools.scaffold import build_entity_structure
 from yatsee.config_tools.validate import validate_entity_config, validate_global_config
-from yatsee.core.config import load_global_config
+from yatsee.core.config import (
+    load_global_config,
+    redact_sensitive_config,
+    resolve_runtime_config,
+)
 
 
 def register_config_commands(subparsers: argparse._SubParsersAction) -> None:
@@ -211,10 +214,12 @@ def handle_config_resolve(args: argparse.Namespace) -> int:
     :param args: Parsed CLI arguments
     :return: Process exit code
     """
-    resolved = resolve_config(
+    resolved = resolve_runtime_config(
         global_config_path=args.config,
         entity=args.entity,
-        redact=not args.show_secrets,
     )
+    if not args.show_secrets:
+        resolved = redact_sensitive_config(resolved)
+
     print(json.dumps(resolved, indent=2, sort_keys=True))
     return 0

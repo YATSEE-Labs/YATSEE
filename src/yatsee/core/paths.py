@@ -37,6 +37,28 @@ def validate_entity_handle(entity: str) -> str:
     return normalized
 
 
+def sanitize_path_component(value: str) -> str:
+    """
+    Normalize a value into one safe filesystem path component.
+
+    This helper is intended for artifact filenames and directory names derived
+    from transcript metadata, configuration, or other untrusted text. It removes
+    path separators and null bytes before callers combine the value with a
+    trusted output root.
+
+    :param value: Raw path component
+    :return: Safe single path component
+    :raises ValidationError: If the value is empty after normalization
+    """
+    normalized = (value or "").replace("\\", "/").strip().strip(".")
+    normalized = normalized.replace("/", "_").replace("\x00", "")
+
+    if not normalized or normalized in {".", ".."}:
+        raise ValidationError("Invalid filesystem path component")
+
+    return normalized
+
+
 def resolve_contained_path(root: str | os.PathLike[str], *parts: str) -> str:
     """
     Resolve a child path and ensure it remains inside a trusted root directory.

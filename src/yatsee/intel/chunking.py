@@ -173,54 +173,64 @@ def prepare_text_chunk_density(
     current_tokens = 0
     accumulated_density = 0
 
-    for sentence in sentences:
+    for sentence_index, sentence in enumerate(sentences):
         sentence_tokens = estimate_token_count(sentence)
         sentence_density = len(keyword_pattern.findall(sentence)) if keyword_pattern else 0
 
-        projected_tokens = current_tokens + sentence_tokens
-        projected_density = accumulated_density + sentence_density
+        # Keep sentence boundaries intact. The completed sentence may take the
+        # chunk slightly beyond its target, after which the chunk is flushed.
+        current_chunk.append(sentence)
+        current_tokens += sentence_tokens
+        accumulated_density += sentence_density
 
-        if projected_density == 0:
+        if accumulated_density == 0:
             scale = 1.0
         else:
-            scale = (density_threshold / projected_density) ** density_exponent
-            scale = max(scale, 0.1)
+            scale = (density_threshold / accumulated_density) ** density_exponent
+            # Density may shrink the configured target, but low-density text
+            # must not expand it. Sentence completion is the only intentional
+            # overage beyond the target.
+            scale = min(1.0, max(scale, 0.1))
 
         effective_max = max(1, int(max_tokens * scale))
+        if current_tokens <= effective_max:
+            continue
 
-        # Flush before appending the next sentence so chunk boundaries remain
-        # stable and the overflow sentence is only introduced once.
-        if current_chunk and projected_tokens > effective_max:
-            chunks.append(" ".join(current_chunk))
+        chunks.append(" ".join(current_chunk))
 
-            overlap_target = (
-                min(int(current_tokens * 0.1), 600)
-                if overlap_tokens is None
-                else int(overlap_tokens)
-            )
+        # A final flushed sentence is already represented in the emitted chunk.
+        # Clearing state avoids writing an overlap-only duplicate after the loop.
+        if sentence_index == len(sentences) - 1:
+            current_chunk = []
+            current_tokens = 0
+            accumulated_density = 0
+            continue
 
-            overlap_chunk: List[str] = []
-            overlap_seen = 0
+        overlap_target = (
+            min(int(current_tokens * 0.1), 600)
+            if overlap_tokens is None
+            else int(overlap_tokens)
+        )
 
+        overlap_chunk: List[str] = []
+        overlap_seen = 0
+
+        if overlap_target > 0:
             for existing_sentence in reversed(current_chunk):
                 overlap_chunk.insert(0, existing_sentence)
                 overlap_seen += estimate_token_count(existing_sentence)
                 if overlap_seen >= overlap_target:
                     break
 
-            current_chunk = overlap_chunk
-            current_tokens = sum(
-                estimate_token_count(existing_sentence)
-                for existing_sentence in current_chunk
-            )
-            accumulated_density = sum(
-                len(keyword_pattern.findall(existing_sentence)) if keyword_pattern else 0
-                for existing_sentence in current_chunk
-            )
-
-        current_chunk.append(sentence)
-        current_tokens += sentence_tokens
-        accumulated_density += sentence_density
+        current_chunk = overlap_chunk
+        current_tokens = sum(
+            estimate_token_count(existing_sentence)
+            for existing_sentence in current_chunk
+        )
+        accumulated_density = sum(
+            len(keyword_pattern.findall(existing_sentence)) if keyword_pattern else 0
+            for existing_sentence in current_chunk
+        )
 
     if current_chunk:
         chunks.append(" ".join(current_chunk))
