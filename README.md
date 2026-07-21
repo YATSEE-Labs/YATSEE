@@ -4,56 +4,118 @@
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-YATSEE is a local-first, source-agnostic pipeline for turning raw meeting media into clean, auditable artifacts: formatted audio, transcripts, normalized text, civic summaries, deterministic meeting signals, and optional downstream search/index data.
+YATSEE is a local-first pipeline for turning long-form meeting media into clean, searchable, and auditable intelligence artifacts. Starting from compatible local media, it normalizes audio, transcribes speech, normalizes transcript text, and produces useful derived artifacts from otherwise unmanageable conversations.
 
-The system is intentionally staged:
+Its outputs include normalized audio, timestamped transcripts, normalized text, high-signal summaries, and structured civic records. Each stage produces inspectable artifacts that can be reviewed, reused, or rerun without depending on a hosted AI service.
 
 ```text
-supply source media
-  ↓
-format → transcribe → optional QA → slice → normalize → summarize / extract signals
-  ↓
-index → search / investigate
+local media
+  → audio normalization
+  → transcription
+  → transcript slicing and normalization
+  → summaries / records
+  → optional indexing, search, or publication
 ```
 
-YATSEE core owns the processing middle of the workflow. Source acquisition, hosted upload flows, publication, and downstream investigation/search are adjacent concerns connected through local files or explicit handoff artifacts.
+YATSEE core begins with compatible local media. Source acquisition is handled separately by [`yatsee-fetch`](https://github.com/YATSEE-Labs/yatsee-fetch), which downloads media and prepares it for the YATSEE pipeline. Hosted uploads, publication, indexing, and search interfaces are also separate systems that exchange explicit files or artifact references with the core pipeline.
 
 ## Why This Exists
 
-Public records are often public in name only. Civic business can be buried in long recordings, inconsistent transcripts, and procedural jargon. YATSEE creates durable local artifacts that make those records easier to inspect, summarize, search, and audit.
+Public records are often public in name only. Important civic decisions are buried in multi-hour livestreams, inconsistent recordings, and jargon-heavy transcripts that may be technically accessible but remain functionally opaque.
 
-## Current Scope
+Understanding what happened can require hours of listening just to identify a vote, contract, expenditure, appointment, project update, or policy debate.
 
-YATSEE uses profile-driven intelligence workflows. The profile system is meant to support multiple artifact types through shared routing and validation rather than one-off processing paths. Individual profile quality and maturity are scoped deliberately; unfinished profiles should not block core pipeline, security, or packaging work.
+YATSEE reduces that barrier. It combines local speech recognition, deterministic processing, and constrained language-model workflows to transform raw meeting media into searchable, evidence-backed information. Citizens, journalists, researchers, and watchdogs can review what happened, trace extracted records back to the source, and inspect the underlying artifacts for themselves.
 
-The durable contract is:
+YATSEE is built to make public proceedings meaningfully accessible, with or without assistance from the institutions that produced them.
 
-- compatible media exists locally or is handed off as a local artifact
-- each pipeline stage has explicit input and output artifacts
-- entity-local config supplies names, titles, divisions, replacements, and context
-- local or hosted LLM providers are selected through a hardened provider boundary
-- generated summaries are useful review artifacts, not official records
+![YATSEE demo](./docs/assets/yatsee_demo.gif)
 
+## Intelligence outputs
 
-## Demo
+| Command | Output | Processing model |
+|---|---|---|
+| `yatsee intel summarize` | Readable Markdown or YAML summary | LLM extraction, optional reductions, final synthesis |
+| `yatsee intel records` | Structured JSON records and an itemized Markdown view | LLM extraction per chunk, deterministic consolidation and rendering |
 
-![Demo video](./docs/assets/yatsee_demo.gif)
+Records and summaries are derived review artifacts, not official minutes. Records preserve transcript evidence and avoid an LLM consolidation pass, but the extracted facts still require source review when accuracy matters.
 
----
+## Installation
 
-## Documentation
+Requirements:
 
-- [YATSEE Pipeline Overview](./docs/yatsee_overview.md)
-- [YATSEE User Guide](./docs/yatsee_user_guide.md)
-- [YATSEE Configuration Guide](./docs/yatsee_config_guide.md)
-- [YATSEE Prompt Orchestration](./docs/yatsee_prompt_orchestration.md)
-- [YATSEE Troubleshooting](./docs/yatsee_troubleshooting.md)
+- Python 3.11+
+- `ffmpeg` and `ffprobe`
+- enough storage for media and derived artifacts
+- a configured local or hosted LLM provider for summaries and structured records
+- an optional GPU for faster transcription and local model inference
 
----
+```bash
+git clone https://github.com/YATSEE-Labs/YATSEE.git
+cd YATSEE
 
-## Command Families
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -e .[full]
+```
 
-YATSEE provides these command families:
+Convenience setup scripts are also available:
+
+```bash
+./scripts/setup.sh
+```
+
+```powershell
+.\scripts\setup.ps1
+```
+
+## Quick start
+
+Copy the example runtime configuration:
+
+```bash
+cp yatsee.conf yatsee.toml
+```
+
+Create and initialize an entity:
+
+```bash
+yatsee config entity add \
+  --display-name "Example County Board" \
+  --entity example_county_board \
+  --base "country.US.state.EX."
+
+yatsee config init -e example_county_board
+yatsee config validate -e example_county_board
+yatsee config resolve -e example_county_board
+```
+
+Place compatible media in the configured input directory, normally:
+
+```text
+data/example_county_board/downloads/
+```
+
+Summary and records generation require a configured LLM provider. Ollama provides the default local-first path, while compatible hosted providers may be configured explicitly.
+
+Run the pipeline:
+
+```bash
+yatsee audio format -e example_county_board
+yatsee audio transcribe -e example_county_board --faster
+yatsee transcript slice -e example_county_board --force
+yatsee transcript normalize -e example_county_board --force
+
+yatsee intel summarize -e example_county_board
+yatsee intel records -e example_county_board -j civic
+```
+
+Records artifacts are reused when the normalized transcript and extraction fingerprint have not changed. The deterministic Markdown view is regenerated from the cached JSON without invoking the model again.
+
+Use `yatsee intel run` only for compatibility; it is an alias for `yatsee intel summarize`.
+
+## Common command families
 
 ```text
 yatsee config ...
@@ -62,283 +124,74 @@ yatsee transcript ...
 yatsee intel ...
 ```
 
-Common commands:
-
-```bash
-yatsee config entity list
-yatsee config validate
-yatsee config resolve --entity <entity>
-
-yatsee audio format -e <entity>
-yatsee audio transcribe -e <entity>
-
-yatsee transcript slice -e <entity>
-yatsee transcript normalize -e <entity>
-
-yatsee intel summarize -e <entity>
-yatsee intel signals -e <entity>
-```
-
-
-`yatsee intel summarize` is the canonical summary command. The older `yatsee intel run` command remains available as a compatibility alias.
-
-The package can also be executed directly:
-
-```bash
-python -m yatsee --help
-```
-
----
-
-## Installation
-
-### System tools
-
-Required or commonly needed:
-
-- `ffmpeg`
-
-### Clone the repository
-
-```bash
-git clone https://github.com/YATSEE-Labs/YATSEE.git
-cd yatsee
-```
-
-### Bootstrap a local environment
-
-Linux/macOS:
-
-```bash
-./scripts/setup.sh
-```
-
-Windows PowerShell:
-
-```powershell
-.\scripts\setup.ps1
-```
-
-These setup scripts are convenience helpers for local development.
-
-### Install directly from `pyproject.toml`
-
-Create and activate a virtual environment.
-
-Linux/macOS:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-Windows PowerShell:
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
-
-Install in editable mode:
-
-```bash
-pip install --upgrade pip
-pip install -e .
-```
-
-Install common optional functionality:
-
-```bash
-pip install -e .[full]
-```
-
-Or install only the extras you need:
-
-```bash
-pip install -e .[pipeline]
-pip install -e .[index]
-pip install -e .[ui]
-pip install -e .[llamacpp]
-```
-
----
-
-## Requirements
-
-Minimum practical requirements:
-
-- **CPU:** modern 64-bit multi-core processor
-- **RAM:** 16 GB recommended
-- **Storage:** enough free disk space for raw media, derived audio, transcripts, summaries, and index data
-- **Python:** 3.11 or newer
-- **OS:** Linux or macOS recommended
-- **Required tools:** `ffmpeg`
-
-A GPU is not required, but transcription and local model execution are much slower on CPU-only systems.
-
-Windows support is not a primary tested platform at this time.
-
----
-
-## Quick Start
-
-### 1. Create a local runtime config
-
-Copy the example config to your local runtime config:
-
-```bash
-cp yatsee.conf yatsee.toml
-```
-
-Edit `yatsee.toml` for your environment and entities.
-
-For the intelligence stage, configure at least:
-
-```text
-llm_provider
-llm_provider_url
-```
-
-Provider hardening settings make trust boundaries explicit:
-
-```text
-llm_allow_loopback_http     # allow localhost/127.0.0.1 HTTP for local model servers
-llm_allow_remote            # allow off-box provider targets
-llm_allow_insecure_http     # allow non-loopback HTTP targets
-llm_allow_custom_executable # allow non-default CLI provider executables
-```
-
-For hosted API keys, prefer an environment variable over config files or command-line flags:
-
-```toml
-llm_api_key_env = "OPENAI_API_KEY"
-```
-
-If omitted, provider hardening defaults to safer local-first behavior.
-
-### 2. Inspect the CLI
+Useful inspection commands:
 
 ```bash
 yatsee --help
-python -m yatsee --help
-yatsee config --help
-yatsee audio --help
-yatsee transcript --help
-yatsee intel --help
+yatsee config resolve -e <entity>
+yatsee intel prompts validate -j civic
+yatsee intel summarize -e <entity> --print-prompts
+yatsee intel records -e <entity> -j civic --print-prompts
 ```
 
-### 3. Validate configuration
+## Prompt profiles
 
-```bash
-yatsee config entity list
-yatsee config validate
-yatsee config resolve --entity <entity>
-```
-
-### 4. Add raw media
-
-Place compatible audio or video files in the entity raw media directory:
+A profile keeps shared classification separate from artifact-specific routing:
 
 ```text
-data/<entity>/downloads/
+prompts/civic/
+├── classifier.toml
+├── prompts.toml
+└── records_prompt.toml
 ```
 
-YATSEE core does not care how the files arrived. They may come from `yatsee-fetch`, recorder output, upload workflows, archival copies, or manual imports.
+- `classifier.toml` identifies the formal meeting type.
+- `prompts.toml` routes summary `first`, `multi`, and `final` prompts.
+- `records_prompt.toml` routes each meeting type to one extraction prompt.
 
-### 5. Process pipeline stages
+Entity-local files under `data/<entity>/prompts/<profile>/` override project defaults.
 
-```bash
-yatsee audio format -e example_entity --dry-run
-yatsee audio format -e example_entity
-yatsee audio transcribe -e example_entity --faster
-yatsee transcript slice -e example_entity --force
-yatsee transcript normalize -e example_entity --force
-yatsee intel summarize -e example_entity
-yatsee intel signals -e example_entity
-```
+The built-in civic profile supports summaries and records. The research profile currently supports summaries but does not include a records sidecar.
 
----
+## Provider trust boundary
 
-## Experimental Transcript QA Helpers
+Local and hosted model providers are supported through one provider layer. Network and executable access remain explicit:
 
-The normal quick-start pipeline does not require transcript QA. For long transcription batches, use the experimental helpers as a separate review/recovery workflow before slicing or summarization.
-
-Inspect VTT quality and write a machine-readable report:
-
-```bash
-python scripts/qa_transcript_report.py --details
-python scripts/qa_transcript_report.py --json qa_report.json
-```
-
-If transcripts are marked for rebuild, reset only those VTT artifacts and tracker entries. Start with a dry run:
-
-```bash
-python scripts/qa_reset_vtt_for_rebuild.py \
-  --entity example_entity \
-  --qa-report qa_report.json
-```
-
-Apply only after reviewing the matched files and tracker changes, then rebuild with the standard transcription defaults:
-
-```bash
-python scripts/qa_reset_vtt_for_rebuild.py \
-  --entity example_entity \
-  --qa-report qa_report.json \
-  --apply
-
-yatsee audio transcribe \
-  -e example_entity \
-  --faster \
-  --get-chunks
-```
-
-The default transcription profile is the QA-safe baseline. These helpers remain experimental while transcript QA rules are being validated.
-
----
-
-## Pipeline Model
-
-YATSEE core owns the processing middle of the workflow:
-
-```text
-downloads/
-  ↓
-audio/
-  ↓
-transcripts_<model>/
-  ↓
-normalized/
-  ↓
-summary_<model>/ and meeting_signals/
-```
-
-Optional downstream tools can consume these artifacts for indexing, search, investigation, publication, or review.
-
-## Configuration Model
-
-YATSEE follows a layered configuration strategy:
-
-1. load global `yatsee.toml`
-2. load entity-local `data/<entity>/config.toml`
-3. merge entity-local settings over global defaults
-4. resolve paths, models, providers, prompts, and stage behavior
-5. run the selected CLI stage
-
-For intelligence-stage providers, YATSEE applies security policy by default:
-
-- loopback HTTP is controlled by the narrow `llm_allow_loopback_http` flag
-- off-box provider targets require `llm_allow_remote=true`
+- loopback HTTP requires `llm_allow_loopback_http=true`
+- off-box targets require `llm_allow_remote=true`
 - non-loopback plain HTTP additionally requires `llm_allow_insecure_http=true`
-- custom CLI executable targets require `llm_allow_custom_executable=true`
+- custom CLI executables require `llm_allow_custom_executable=true`
 
-## Search and Indexing
+Prefer environment variables for API keys:
 
-YATSEE can be used with downstream search and indexing workflows built on top of normalized transcripts, summaries, segment artifacts, and signal artifacts.
+```toml
+[system]
+llm_api_key_env = "OPENAI_API_KEY"
+```
 
-Vector indexing and investigation/search are separate from the core pipeline. They consume YATSEE outputs rather than redefining the pipeline.
+## Documentation
+
+Operator documentation:
+
+- [Pipeline overview](./docs/yatsee_overview.md)
+- [User guide](./docs/yatsee_user_guide.md)
+- [Configuration guide](./docs/yatsee_config_guide.md)
+- [Prompt orchestration](./docs/yatsee_prompt_orchestration.md)
+- [Troubleshooting](./docs/yatsee_troubleshooting.md)
+- [Transcription defaults](./docs/transcription-defaults.md)
+
+Project direction:
+
+- [Product touchstone](./docs/touchstone.md)
+- [Input and distribution roadmap](./docs/input-and-distribution-roadmap.md)
+- [Hosted architecture notes](./docs/saas_architecture.md)
+- [Commercial strategy](./docs/commercial_strategy.md)
+- [Traction notes](./docs/traction.md)
+
+## Optional QA and downstream tools
+
+Transcript QA helpers live under `scripts/`. Index and search prototypes live under `examples/`. These tools consume pipeline artifacts but are not required for the core media-to-artifact workflow.
 
 ## License
 
-YATSEE is open-source software licensed under the **GNU Affero General Public License v3.0 (AGPLv3)**.
-
-Commercial licensing is available for proprietary or closed-source use. Contact admin <at> alias454 <dot> com.
+YATSEE is licensed under the GNU Affero General Public License v3.0. Commercial licensing is available for proprietary or closed-source use. Contact `admin <at> alias454 <dot> com`.
