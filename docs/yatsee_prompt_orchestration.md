@@ -13,7 +13,7 @@ prompts/<profile>/
 
 | File | Used by | Contract |
 |---|---|---|
-| `classifier.toml` | Summary and records | Allowed labels plus one classifier prompt |
+| `classifier.toml` | Summary and records | Allowed labels plus a classifier prompt when multiple labels exist |
 | `prompts.toml` | Summary | Meeting type to `first`, `multi`, and `final` prompt IDs |
 | `records_prompt.toml` | Records | Meeting type to one extraction prompt ID |
 
@@ -53,7 +53,16 @@ Transcript Snippet: {text}
 
 The classifier should identify the meeting body, not the subject matter. A Committee of the Whole meeting remains `committee_of_the_whole` when it discusses budgets or zoning.
 
-Classification uses filename-derived context plus an initial transcript snippet. Disable or override it when the meeting type is already known:
+A profile with exactly one allowed type is deterministic and may omit `[classifier_prompt]` entirely:
+
+```toml
+[classifier_types]
+allowed = ["general"]
+```
+
+YATSEE selects that sole type without calling the model or charging classifier token usage. Profiles with multiple allowed types must provide a classifier prompt containing both `{context}` and `{text}`.
+
+Multi-label classification uses filename-derived context plus an initial transcript snippet. Disable or override it when the meeting type is already known:
 
 ```bash
 yatsee intel summarize -e <entity> --disable-auto-classification
@@ -211,7 +220,7 @@ Inspect records artifacts under the transcript-specific `raw/`, `chunks/`, and `
 
 | Profile | Classifier | Summary | Records |
 |---|---:|---:|---:|
-| `civic` | Yes | Yes | Yes |
-| `research` | Yes | Yes | No sidecar yet |
+| `civic` | Deterministic `general` | Yes | Yes |
+| `research` | Multi-label | Yes | No sidecar yet |
 
 A missing records sidecar fails clearly rather than silently falling back to summary prompts.

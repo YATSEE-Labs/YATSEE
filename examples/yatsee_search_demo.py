@@ -31,6 +31,8 @@ import toml
 from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 
+from yatsee.intel.layout import resolve_intel_layout
+
 parser = argparse.ArgumentParser(description="Yatsee Search")
 parser.add_argument("-e", "--entity", help="Entity handle (e.g. example_entity_name)")
 parser.add_argument("-c", "--config", default="yatsee.toml", help="Path to global yatsee.toml")
@@ -88,6 +90,49 @@ st.markdown(
 # ============================================================================
 # CONFIG LOADING
 # ============================================================================
+
+def resolve_summary_directory(
+    global_cfg: Dict[str, Any],
+    entity_cfg: Dict[str, Any],
+) -> str:
+    """
+    Resolve the current model-specific summary artifact directory.
+
+    The examples still own their legacy configuration loading, but summary
+    storage follows the same ``intel_<model>/summaries`` contract as the main
+    application.
+
+    :param global_cfg: Parsed global configuration
+    :param entity_cfg: Merged entity runtime configuration
+    :return: Resolved summaries directory
+    :raises ValueError: If the configured summarization model is unavailable
+    """
+    model_name = (
+        entity_cfg.get("summarization_model")
+        or global_cfg.get("system", {}).get("default_summarization_model")
+    )
+    if not model_name:
+        raise ValueError("No summarization model is configured")
+
+    model_key = next(
+        (
+            key
+            for key in global_cfg.get("models", {})
+            if key.lower() == str(model_name).lower()
+        ),
+        None,
+    )
+    if not model_key:
+        raise ValueError(f"Summarization model '{model_name}' is not configured")
+
+    model_cfg = global_cfg["models"][model_key]
+    return resolve_intel_layout(
+        entity_cfg["data_path"],
+        model_key,
+        model_cfg,
+    )["summaries_dir"]
+
+
 def load_global_config(path: str) -> Dict[str, Any]:
     """
     Load the global YATSEE configuration file.
@@ -183,7 +228,7 @@ MODEL_NAME = (
     or "BAAI/bge-small-en-v1.5"
 )
 
-SUMMARY_DIR = os.path.join(data_path, global_cfg["models"][entity_cfg["summarization_model"]]["append_dir"])
+SUMMARY_DIR = resolve_summary_directory(global_cfg, entity_cfg)
 TRANSCRIPT_DIR = os.path.join(data_path, "normalized")
 DOWNLOAD_TRACKER = os.path.join(data_path, "downloads", ".downloaded")
 
@@ -250,6 +295,12 @@ def load_video_id_map(tracker_path: str = DOWNLOAD_TRACKER) -> Dict[str, str]:
 # TEXT & METADATA UTILITIES
 # ============================================================================
 def get_summary_files(summary_dir):
+    """
+    Discover and label summary Markdown files for the selected entity.
+
+    :param summary_dir: Summary artifact directory
+    :return: Date-sorted summary metadata
+    """
     # --- Summaries ---
     summary_paths = sorted(glob(os.path.join(summary_dir, "*.summary.md")))
     summaries: List[Dict[str, Any]] = []
@@ -670,6 +721,11 @@ def run_search():
 # SESSION STATE INITIALIZATION
 # ==========================================
 def init_session_state():
+    """
+    Initialize Streamlit session defaults for the current entity.
+
+    :return: None
+    """
     st.session_state.setdefault("search_results", [])
     st.session_state.setdefault("last_query", None)
     st.session_state.setdefault("selected_summary", "-- Select Meeting --")
@@ -681,6 +737,12 @@ def init_session_state():
 # UI: SIDEBAR
 # ==========================================
 def render_sidebar(summaries):
+    """
+    Render summary navigation and runtime status in the sidebar.
+
+    :param summaries: Available summary metadata
+    :return: None
+    """
     with st.sidebar:
         st.header("🗂️ Summaries")
 
@@ -720,6 +782,11 @@ def render_sidebar(summaries):
 # VIEW A: FULL TRANSCRIPT READER
 # ==========================================
 def render_transcript_viewer():
+    """
+    Render the selected full transcript view.
+
+    :return: None
+    """
     transcript_path = st.session_state.viewing_transcript
     fname = os.path.basename(transcript_path)
     pretty_name, _ = extract_context_from_filename(fname)
@@ -747,6 +814,12 @@ def render_transcript_viewer():
 # VIEW B: SUMMARY READER
 # ==========================================
 def render_summary_viewer(summaries):
+    """
+    Render the selected summary and its source-navigation controls.
+
+    :param summaries: Available summary metadata
+    :return: None
+    """
     selected = next((s for s in summaries if s["label"] == st.session_state.selected_summary), None)
     if not selected:
         return
@@ -797,6 +870,12 @@ def render_summary_viewer(summaries):
 # VIEW C: SEARCH INTERFACE (DEFAULT)
 # ==========================================
 def render_search_view(summaries):
+    """
+    Render the default semantic-search result interface.
+
+    :param summaries: Available summary metadata
+    :return: None
+    """
     st.markdown("### Search Archives")
 
     st.text_input(

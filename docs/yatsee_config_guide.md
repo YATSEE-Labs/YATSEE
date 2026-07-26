@@ -48,7 +48,7 @@ default_transcription_model = "medium"
 default_summarization_model = "gemma4:e4b"
 default_records_model = "gemma4:e4b"
 default_sentence_model = "en_core_web_sm"
-default_embedding_model = "all-MiniLM-L6-v2"
+default_embedding_model = "BAAI/bge-small-en-v1.5"
 
 llm_provider = "ollama"
 llm_provider_url = "http://localhost:11434"
@@ -65,6 +65,8 @@ pricing_model = "gpt-5.4"
 ```
 
 Only configure keys relevant to the providers and stages you use.
+
+`default_embedding_model` is shared by embedding-backed transcript artifacts and optional records timestamp alignment. Records uses it when `--align-timestamps` or `--timestamp-only` is passed.
 
 ## Entity registry
 
@@ -94,6 +96,7 @@ entity_level = "county"
 location = "Example County, Example State"
 data_path = "./data/example_board"
 notes = "Public meeting recordings."
+# embedding_model = "BAAI/bge-small-en-v1.5"  # optional entity override
 
 [media]
 input_dir = "downloads"
@@ -142,9 +145,9 @@ Models are declared by exact configured name:
 
 ```toml
 [models."gemma4:e4b"]
-append_dir = "summary_gemma4_e4b"
+# Optional; defaults to intel_gemma4_e4b.
+intel_append_dir = "intel_gemma4_e4b"
 max_tokens = 2500
-records_append_dir = "records/gemma4_e4b"
 records_max_tokens = 1500
 num_ctx = 16384
 ```
@@ -153,13 +156,14 @@ Relevant fields:
 
 | Field | Used by | Meaning |
 |---|---|---|
-| `append_dir` | Summary | Entity-relative summary output directory |
+| `intel_append_dir` | All intelligence stages | Optional entity-relative model workspace override |
 | `max_tokens` | Summary | Default source chunk token budget |
-| `records_append_dir` | Records | Optional entity-relative records output directory |
 | `records_max_tokens` | Records | Default records source chunk budget |
 | `num_ctx` | Both | Provider model context setting and chunk-size guard |
 
-If `records_append_dir` is absent, records default to `records/<sanitized-model-name>`.
+If `intel_append_dir` is absent, entity-backed intelligence stages default to
+`intel_<sanitized-model-name>/` with `summaries/`, `records/`, `events/`, and
+`audit/` children.
 
 ### Summary model precedence
 
@@ -180,6 +184,18 @@ If `records_append_dir` is absent, records default to `records/<sanitized-model-
 ```
 
 Records can therefore start with the summary model configuration and later move to a dedicated model without changing the command contract.
+
+## Embedding model resolution
+
+Embedding-backed stages resolve the model in this order:
+
+```text
+entity [settings].embedding_model
+→ [system].default_embedding_model
+→ BAAI/bge-small-en-v1.5 fallback
+```
+
+For records, the embedding model is loaded only when `--align-timestamps` or `--timestamp-only` is explicitly supplied and at least one matching segment JSONL artifact exists. No timestamp-specific model key is required. Hybrid alignment compares record evidence/context against the embeddings already stored by `transcript slice --gen-embed`, so both stages must resolve the same embedding model. Regenerate sliced JSONL after changing the entity or global embedding model.
 
 ## Provider configuration and security
 
@@ -272,8 +288,10 @@ Entity-backed intelligence runs default to:
 
 ```text
 input:  data/<entity>/normalized/
-summary output: configured model append_dir
-records output: configured records_append_dir or records/<model>/
+summary output: intel_<model>/summaries/
+records output: intel_<model>/records/
+events output: intel_<model>/events/
+audit output: intel_<model>/audit/
 ```
 
 Without an entity, commands require explicit input and output paths. Paths used for destructive or generated operations are resolved and checked through shared path helpers.

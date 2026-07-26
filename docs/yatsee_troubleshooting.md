@@ -178,9 +178,41 @@ The built-in `research` profile currently has no records sidecar.
 
 ### Records output is reused
 
-A complete `.records.json` artifact is reused only when its normalized transcript hash and extraction fingerprint match the current run. The fingerprint covers extraction-relevant inputs such as the model, prompts, profile, meeting-type controls, chunking settings, and entity context.
+An existing `.records.json` artifact is reused whenever its stored normalized transcript hash matches the current normalized transcript. Prompt, classifier, model, profile, schema/version, status, and chunk metadata do not invalidate reuse. Use `--force` when you intentionally want those changes to regenerate records.
 
-A stale, malformed, partial, or incompatible artifact triggers a full transcript extraction automatically. Use `--force` only to bypass an otherwise compatible cache entry.
+A normalized transcript hash mismatch or missing records artifact triggers extraction automatically. An existing unreadable artifact, an artifact without a records list, or an artifact without `source_sha256` fails clearly and requires `--force`; it does not silently launch model work.
+
+### Timestamp alignment is skipped
+
+`--align-timestamps` requires a matching sliced artifact named:
+
+```text
+transcripts_<transcription_model>/<transcript>.segments.jsonl
+```
+
+Create it with:
+
+```bash
+yatsee transcript slice -e <entity> --gen-embed --force
+```
+
+Then rerun records with `--align-timestamps`. This performs the normal records workflow first: source-matching artifacts are reused, while missing records or records whose normalized source changed are extracted, and every successful artifact is then aligned. Use `--force --align-timestamps` to rebuild every selected records artifact before alignment. Use `--timestamp-only` when you need a strict no-LLM forced realignment pass over usable existing records; compatible alignment caches are ignored, while missing or unusable records and missing segment files are reported and skipped. Evidence absent from the current segments remains unmatched.
+
+Hybrid alignment requires a valid `embedding` vector on every segment row. If the report says embeddings are missing or their dimensions do not match, regenerate the sliced JSONL with the same embedding model resolved for records:
+
+```bash
+yatsee transcript slice -e <entity> --gen-embed --force
+```
+
+The matcher reuses those stored vectors to shortlist candidate neighborhoods. It does not re-embed the full segment corpus or perform an exhaustive lexical comparison against every window.
+
+When alignment runs, inspect:
+
+```text
+intel_<model>/records/<transcript>/<transcript>.records.alignment.json
+```
+
+Unmatched or ambiguous evidence is intentionally left without `timestamp` or `video_id`. Do not lower matcher thresholds only to increase the match count.
 
 ### Classification selected the wrong route
 
@@ -199,8 +231,8 @@ Use `--disable-auto-classification` to select the `general` route.
 Inspect:
 
 ```text
-records/<model>/<transcript>/raw/
-records/<model>/<transcript>/errors/
+intel_<model>/records/<transcript>/raw/
+intel_<model>/records/<transcript>/errors/
 ```
 
 Common causes:
@@ -223,7 +255,7 @@ Check the selected route, chunk output, transcript quality, and whether the segm
 
 ### Partial records run does not resume
 
-Current records runs are transcript-level, not chunk-resumable. Compatible complete artifacts are reused when the normalized transcript hash and extraction fingerprint match. A stale or missing artifact triggers a full transcript extraction. Partial attempts are written separately and do not replace a previous complete artifact.
+Current records runs are transcript-level, not chunk-resumable. Existing artifacts are reused when the normalized transcript hash matches, regardless of status or extraction provenance. A changed normalized transcript or missing artifact triggers a full transcript extraction. Partial attempts are written separately and do not replace a previous final artifact.
 
 ## Pricing output is missing
 

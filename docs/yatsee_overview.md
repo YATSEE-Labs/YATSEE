@@ -27,7 +27,8 @@ Source acquisition is handled outside YATSEE core. Compatible local media can co
 | Slice | `yatsee transcript slice` | VTT | TXT and optional segment JSONL |
 | Normalize | `yatsee transcript normalize` | Transcript TXT | Clean normalized TXT |
 | Summarize | `yatsee intel summarize` | Normalized TXT | Markdown or YAML summary |
-| Records | `yatsee intel records` | Normalized TXT | Structured JSON records and deterministic Markdown view |
+| Records | `yatsee intel records` | Normalized TXT, optional segment JSONL | Structured JSON records, optional timestamps, and deterministic Markdown view |
+| Events | `yatsee intel events` | Complete records JSON | Provenance-preserving meeting events, Markdown, and entity JSON indexes |
 
 Each processing command can accept an entity or explicit input and output paths. Entity-backed runs use the configured entity data directory.
 
@@ -42,13 +43,15 @@ data/<entity>/
 ├── audio/
 ├── transcripts_<model>/
 ├── normalized/
-├── summary_<model>/
-├── records/
-│   └── <model>/
+├── intel_<model>/
+│   ├── summaries/
+│   ├── records/
+│   ├── events/
+│   └── audit/
 └── yatsee_db/              # optional indexing/search data
 ```
 
-Model-specific directories preserve provenance. Custom model configuration may use different summary or records directory names.
+Each `intel_<model>` workspace preserves one complete model lineage. An optional `intel_append_dir` model setting may override the workspace name.
 
 ## Intelligence workflows
 
@@ -72,6 +75,7 @@ classify meeting
   → extract JSON records from each chunk once
   → parse and validate each chunk
   → deterministically remove exact duplicates
+  → optionally align final evidence to timestamped segments
   → write final records JSON
   → render an itemized Markdown view
 ```
@@ -88,11 +92,29 @@ evidence
 attribution         optional
 attributes          optional
 source_chunks
+timestamp           optional numeric seconds
+video_id            optional case-preserved source video ID
 ```
 
 Raw provider responses and parsed chunk artifacts are retained beside the final JSON. Invalid chunk output is written to the `errors/` directory; later chunks continue and the attempt is marked partial.
 
-The final JSON includes the normalized transcript hash and an extraction fingerprint covering the model, prompts, profile, chunking settings, and relevant entity context. Compatible artifacts are reused without invoking the model, while the Markdown view is regenerated directly from JSON. Partial attempts are written separately and do not replace a previous complete artifact.
+The final JSON includes the normalized transcript hash plus human-readable extraction provenance such as model, prompt route, profile, and chunking settings. The normalized transcript hash is the only automatic records-cache invalidator; prompt, model, profile, schema/version, status, and chunk metadata changes require an explicit `--force`. Reused artifacts do not invoke the model, and the Markdown view is regenerated directly from JSON. Partial attempts are written separately and do not replace a previous final artifact.
+
+Timestamp enrichment runs when `--align-timestamps` is supplied. The command first performs the normal source-hash records workflow: matching records artifacts are reused, while missing artifacts or artifacts whose normalized source hash changed are extracted. Every available successful records artifact is then aligned. `--force --align-timestamps` rebuilds every selected records artifact before alignment; partial rebuilds preserve the previous final artifact. `--timestamp-only` is the separate forced-realignment mode that returns before extraction prompt loading, provider resolution, chunk generation, and LLM session creation. It accepts any existing records JSON object with a usable `records` list and non-empty evidence, ignores compatible alignment reuse, recalculates timestamps, and skips missing or unusable artifacts. Hybrid mode follows the indexing path: record evidence and context embeddings are compared in one vectorized operation against stored segment embeddings, the top source neighborhoods are expanded into adjacent windows, and conservative lexical and ambiguity rules run only on that shortlist. Exact repeated evidence occurrences are retained so top-K filtering cannot hide a competing procedural phrase. Accepted matches add `timestamp` and optional `video_id`; the Markdown renderer turns that pair into a timestamped source-video link. Ambiguous and unsupported evidence remains unmodified. Detailed candidate scores are written to `<transcript>.records.alignment.json`. Persisted records and alignment input paths are serialized relative to the directory containing `yatsee.toml`. Alignment has an independent fingerprint.
+
+### Events
+
+```text
+read complete records JSON
+  → preserve one-based source-record provenance
+  → collapse only strong adjacent duplicates
+  → group local motion / second / request / vote sequences
+  → preserve uncertain records as separate events
+  → write meeting events JSON and Markdown
+  → write entity events.jsonl and meetings.json indexes
+```
+
+Events are a deterministic projection over records. They do not invoke an LLM, alter source records, or claim semantic reconciliation when evidence is ambiguous. Every event retains its contributing source records, chunks, evidence, timestamps, and optional video IDs. Derived review flags identify unattached motion requests, unattached seconds, conflicting outcomes, or mixed source-video IDs.
 
 ## Prompt profile layout
 
@@ -135,6 +157,7 @@ yatsee transcript normalize -e <entity> --force
 
 yatsee intel summarize -e <entity>
 yatsee intel records -e <entity> -j civic
+yatsee intel events -e <entity>
 ```
 
 ## Trust boundaries
