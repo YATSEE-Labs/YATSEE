@@ -309,6 +309,11 @@ def find_asr_loops(
     run_count = 0
 
     def flush_run() -> None:
+        """
+        Emit the current repeated-prefix run when it is actionable.
+
+        :return: None
+        """
         nonlocal run_key, run_start, run_end, run_text, run_count
         nonlocal run_start_seconds, run_end_seconds
 

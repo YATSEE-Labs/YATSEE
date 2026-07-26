@@ -6,7 +6,7 @@
 
 YATSEE is a local-first pipeline for turning long-form meeting media into clean, searchable, and auditable intelligence artifacts. Starting from compatible local media, it normalizes audio, transcribes speech, normalizes transcript text, and produces useful derived artifacts from otherwise unmanageable conversations.
 
-Its outputs include normalized audio, timestamped transcripts, normalized text, high-signal summaries, and structured civic records. Each stage produces inspectable artifacts that can be reviewed, reused, or rerun without depending on a hosted AI service.
+Its outputs include normalized audio, timestamped transcripts, normalized text, high-signal summaries, structured civic records, and deterministic civic events. Each stage produces inspectable artifacts that can be reviewed, reused, or rerun without depending on a hosted AI service.
 
 ```text
 local media
@@ -14,6 +14,7 @@ local media
   → transcription
   → transcript slicing and normalization
   → summaries / records
+  → deterministic events
   → optional indexing, search, or publication
 ```
 
@@ -36,7 +37,8 @@ YATSEE is built to make public proceedings meaningfully accessible, with or with
 | Command | Output | Processing model |
 |---|---|---|
 | `yatsee intel summarize` | Readable Markdown or YAML summary | LLM extraction, optional reductions, final synthesis |
-| `yatsee intel records` | Structured JSON records and an itemized Markdown view | LLM extraction per chunk, deterministic consolidation and rendering |
+| `yatsee intel records` | Structured JSON records and an itemized Markdown view, with optional evidence timestamps | LLM extraction per chunk, deterministic consolidation, optional segment alignment, and rendering |
+| `yatsee intel events` | Provenance-preserving civic events, meeting Markdown, and entity JSON indexes | Deterministic adjacent-duplicate consolidation and local motion/second/vote grouping |
 
 Records and summaries are derived review artifacts, not official minutes. Records preserve transcript evidence and avoid an LLM consolidation pass, but the extracted facts still require source review when accuracy matters.
 
@@ -109,9 +111,21 @@ yatsee transcript normalize -e example_county_board --force
 
 yatsee intel summarize -e example_county_board
 yatsee intel records -e example_county_board -j civic
+yatsee intel events -e example_county_board
 ```
 
-Records artifacts are reused when the normalized transcript and extraction fingerprint have not changed. The deterministic Markdown view is regenerated from the cached JSON without invoking the model again.
+Events are generated entirely from complete records artifacts. The workflow does not invoke an LLM, modify source records, or require transcript embeddings. It writes model-specific meeting event artifacts plus aggregate `events.jsonl` and `meetings.json` indexes suitable for publication and downstream search.
+
+Records artifacts are reused whenever the normalized transcript hash is unchanged. Prompt, classifier, model, profile, schema/version, status, and chunk metadata are provenance only; use `--force` when you intentionally want those changes to regenerate records. The deterministic Markdown view is regenerated from cached JSON without invoking the model again.
+
+To enrich final records with timestamps and case-preserved video IDs, first create segment JSONL artifacts and then pass the explicit records flag:
+
+```bash
+yatsee transcript slice -e example_county_board --gen-embed --force
+yatsee intel records -e example_county_board -j civic --align-timestamps
+```
+
+`--align-timestamps` extends the normal records workflow: cached records whose normalized source hash matches are reused and aligned, while missing records or records whose normalized source changed are extracted and then aligned. Add `--force` only when every selected records artifact should be rebuilt before alignment. Use `--timestamp-only` for the strict no-LLM operation that force-recalculates timestamps for every usable existing records JSON, ignores compatible alignment reuse, and skips missing or unusable artifacts. Hybrid alignment reuses stored segment embeddings to shortlist source neighborhoods, then applies lexical and ambiguity checks only to nearby windows. When an accepted match includes a real video ID, the deterministic Markdown view renders a timestamped link back to the source video.
 
 Use `yatsee intel run` only for compatibility; it is an alias for `yatsee intel summarize`.
 
@@ -151,7 +165,10 @@ prompts/civic/
 
 Entity-local files under `data/<entity>/prompts/<profile>/` override project defaults.
 
-The built-in civic profile supports summaries and records. The research profile currently supports summaries but does not include a records sidecar.
+The built-in `civic` profile is the portable, single-route starting point for
+new entities and supports deterministic classification, summaries, and records.
+The research profile currently supports summaries but does not include a records
+sidecar.
 
 ## Provider trust boundary
 
@@ -179,14 +196,6 @@ Operator documentation:
 - [Prompt orchestration](./docs/yatsee_prompt_orchestration.md)
 - [Troubleshooting](./docs/yatsee_troubleshooting.md)
 - [Transcription defaults](./docs/transcription-defaults.md)
-
-Project direction:
-
-- [Product touchstone](./docs/touchstone.md)
-- [Input and distribution roadmap](./docs/input-and-distribution-roadmap.md)
-- [Hosted architecture notes](./docs/saas_architecture.md)
-- [Commercial strategy](./docs/commercial_strategy.md)
-- [Traction notes](./docs/traction.md)
 
 ## Optional QA and downstream tools
 

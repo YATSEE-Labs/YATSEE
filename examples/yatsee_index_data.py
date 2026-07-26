@@ -62,6 +62,8 @@ from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
+from yatsee.intel.layout import resolve_intel_layout
+
 
 def logger_setup(cfg: dict) -> logging.Logger:
     """
@@ -81,6 +83,48 @@ def logger_setup(cfg: dict) -> logging.Logger:
     log_format = cfg.get("log_format", "%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.basicConfig(format=log_format, level=log_level)
     return logging.getLogger(__name__)
+
+
+def resolve_summary_directory(
+    global_cfg: Dict[str, Any],
+    entity_cfg: Dict[str, Any],
+) -> str:
+    """
+    Resolve the current model-specific summary artifact directory.
+
+    The examples still own their legacy configuration loading, but summary
+    storage follows the same ``intel_<model>/summaries`` contract as the main
+    application.
+
+    :param global_cfg: Parsed global configuration
+    :param entity_cfg: Merged entity runtime configuration
+    :return: Resolved summaries directory
+    :raises ValueError: If the configured summarization model is unavailable
+    """
+    model_name = (
+        entity_cfg.get("summarization_model")
+        or global_cfg.get("system", {}).get("default_summarization_model")
+    )
+    if not model_name:
+        raise ValueError("No summarization model is configured")
+
+    model_key = next(
+        (
+            key
+            for key in global_cfg.get("models", {})
+            if key.lower() == str(model_name).lower()
+        ),
+        None,
+    )
+    if not model_key:
+        raise ValueError(f"Summarization model '{model_name}' is not configured")
+
+    model_cfg = global_cfg["models"][model_key]
+    return resolve_intel_layout(
+        entity_cfg["data_path"],
+        model_key,
+        model_cfg,
+    )["summaries_dir"]
 
 
 def load_global_config(path: str) -> Dict[str, Any]:
@@ -427,6 +471,11 @@ def index_transcripts(files: list, nlp_model, embedder, collection, id_map: dict
 
 
 def main() -> int:
+    """
+    Parse indexing options and populate the configured Chroma collection.
+
+    :return: Process exit code
+    """
     parser = argparse.ArgumentParser(
         description="Index city council summaries and transcripts into a vector database using ChromaDB and SentenceTransformers.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -535,7 +584,7 @@ def main() -> int:
     # Ingest summaries
     # ------------------
     # Determine input/output directory based on entity or CLI override
-    summary_dir = os.path.join(entity_cfg["data_path"], global_cfg["models"][entity_cfg["summarization_model"]]["append_dir"])
+    summary_dir = resolve_summary_directory(global_cfg, entity_cfg)
     summary_files = discover_files(summary_dir,".md")
     if not summary_files:
         logger.error("Summary directory does not exist: %s", summary_dir)

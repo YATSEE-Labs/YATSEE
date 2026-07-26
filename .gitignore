@@ -31,3 +31,8 @@ dist/
 
 # Local scratch / throwaway work
 *scratch*
+
+# Local patch-transfer, backup, and generated security artifacts
+/llm-features.patch
+/sbom.json
+*.bak

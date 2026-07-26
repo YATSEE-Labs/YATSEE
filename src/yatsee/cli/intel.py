@@ -39,6 +39,20 @@ def register_intel_commands(subparsers: argparse._SubParsersAction) -> None:
     _add_records_arguments(records_parser)
     records_parser.set_defaults(handler=handle_intel_records)
 
+    events_parser = intel_subparsers.add_parser(
+        "events",
+        help="Generate deterministic civic events from records artifacts",
+    )
+    _add_events_arguments(events_parser)
+    events_parser.set_defaults(handler=handle_intel_events)
+
+    audit_parser = intel_subparsers.add_parser(
+        "audit",
+        help="Audit existing records artifacts without invoking an LLM",
+    )
+    _add_audit_arguments(audit_parser)
+    audit_parser.set_defaults(handler=handle_intel_audit)
+
     prompts_parser = intel_subparsers.add_parser("prompts", help="Prompt bundle utilities")
     prompts_subparsers = prompts_parser.add_subparsers(dest="prompt_command")
 
@@ -178,8 +192,278 @@ def _add_records_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Bypass compatible records reuse and rerun extraction",
+        help="Rebuild records regardless of normalized source hash",
     )
+    parser.add_argument(
+        "--align-timestamps",
+        action="store_true",
+        help=(
+            "Run the normal records workflow, then align all available records "
+            "to sliced segment timestamps"
+        ),
+    )
+    parser.add_argument(
+        "--timestamp-only",
+        action="store_true",
+        help=(
+            "Force timestamp recalculation for existing records only; skip missing "
+            "or unusable records and never invoke the LLM"
+        ),
+    )
+
+
+def _add_events_arguments(parser: argparse.ArgumentParser) -> None:
+    """
+    Register deterministic records-to-events arguments.
+
+    :param parser: Events subparser to configure
+    :return: None
+    """
+    parser.add_argument(
+        "-e",
+        "--entity",
+        required=True,
+        help="Entity handle whose records corpus should become events",
+    )
+    parser.add_argument(
+        "-m",
+        "--model",
+        help="Configured records model/output directory override",
+    )
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        help="Events output directory override",
+    )
+    parser.add_argument(
+        "-i",
+        "--meeting",
+        dest="meeting_filter",
+        help="Generate events only for meeting directories containing this text",
+    )
+
+
+
+def _add_audit_arguments(parser: argparse.ArgumentParser) -> None:
+    """
+    Register deterministic records-audit arguments.
+
+    :param parser: Audit subparser to configure
+    :return: None
+    """
+    parser.add_argument(
+        "-e",
+        "--entity",
+        required=True,
+        help="Entity handle whose records corpus should be audited",
+    )
+    parser.add_argument(
+        "-m",
+        "--model",
+        help="Configured records model/output directory override",
+    )
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        help="Audit report directory override",
+    )
+    parser.add_argument(
+        "-i",
+        "--meeting",
+        dest="meeting_filter",
+        help="Audit only meeting directories containing this text",
+    )
+    profile_group = parser.add_mutually_exclusive_group()
+    profile_group.add_argument(
+        "--profile",
+        dest="audit_profile",
+        choices=["balanced", "strict"],
+        default="balanced",
+        help=(
+            "Audit sensitivity profile; balanced is calibrated for practical "
+            "small-model extraction"
+        ),
+    )
+    profile_group.add_argument(
+        "--strict",
+        dest="audit_profile",
+        action="store_const",
+        const="strict",
+        help="Alias for --profile strict",
+    )
+    rebuild_group = parser.add_mutually_exclusive_group()
+    rebuild_group.add_argument(
+        "--rebuild",
+        dest="rebuild_mode",
+        action="store_const",
+        const="plan",
+        help=(
+            "Calculate structurally justified meeting rebuild candidates, write "
+            "a manifest, and stop without invoking an LLM"
+        ),
+    )
+    rebuild_group.add_argument(
+        "--rebuild-auto",
+        dest="rebuild_mode",
+        action="store_const",
+        const="auto",
+        help=(
+            "Attempt each structurally justified meeting rebuild once, then "
+            "rerun the audit without retrying remaining failures"
+        ),
+    )
+    parser.add_argument(
+        "--format",
+        dest="output_format",
+        choices=["all", "json", "csv", "markdown"],
+        default="all",
+        help="Report format to write",
+    )
+    parser.add_argument(
+        "--top",
+        type=int,
+        default=20,
+        help="Maximum detailed meetings in the Markdown review queue",
+    )
+    parser.add_argument(
+        "--min-risk",
+        type=int,
+        default=1,
+        help="Minimum risk score for detailed Markdown findings",
+    )
+
+
+
+def handle_intel_events(args: argparse.Namespace) -> int:
+    """
+    Generate deterministic civic events and print a compact stage report.
+
+    :param args: Parsed CLI arguments
+    :return: Process exit code
+    """
+    from yatsee.intel.events import run_events_stage
+
+    result = run_events_stage(
+        global_config_path=args.config,
+        entity=args.entity,
+        model=args.model,
+        output_dir=args.output_dir,
+        meeting_filter=args.meeting_filter,
+    )
+
+    print(f"Entity: {result['entity']}")
+    print(f"Model: {result['model']}")
+    print(f"Records directory: {result['records_dir']}")
+    print(f"Events output directory: {result['output_dir']}")
+    print(f"Meetings discovered: {result['discovered']}")
+    print(f"Meetings processed: {result['processed']}")
+    print(f"Meetings skipped: {result['skipped']}")
+    print(f"Source records: {result['source_record_count']}")
+    print(f"Events generated: {result['event_count']}")
+    print(f"Decision events: {result['decision_event_count']}")
+    print(f"Multi-record events: {result['multi_record_event_count']}")
+    print(f"Adjacent duplicates consolidated: {result['duplicate_record_count']}")
+    print(f"Events index: {result['events_jsonl_path']}")
+    print(f"Meetings index: {result['meetings_json_path']}")
+
+    for item in result["results"]:
+        artifact = item["artifact"]
+        print(f"- {item['meeting']}")
+        print(f"  JSON: {item['json_path']}")
+        print(f"  Markdown: {item['markdown_path']}")
+        print(
+            "  Records/events: "
+            f"{artifact['source_record_count']}/{artifact['event_count']}"
+        )
+        print(f"  Decision events: {artifact['decision_event_count']}")
+        if artifact["duplicate_record_count"]:
+            print(
+                "  Adjacent duplicates consolidated: "
+                f"{artifact['duplicate_record_count']}"
+            )
+        if artifact.get("review_flag_counts"):
+            rendered = ", ".join(
+                f"{key}={value}"
+                for key, value in sorted(artifact["review_flag_counts"].items())
+            )
+            print(f"  Review flags: {rendered}")
+
+    for item in result["skipped_results"]:
+        print(f"- Skipped {item['meeting']}: {item['reason']}")
+    return 0
+
+
+def handle_intel_audit(args: argparse.Namespace) -> int:
+    """
+    Audit existing records artifacts and print a compact corpus report.
+
+    :param args: Parsed CLI arguments
+    :return: Process exit code
+    """
+    from yatsee.intel.audit import run_records_audit
+
+    result = run_records_audit(
+        global_config_path=args.config,
+        entity=args.entity,
+        model=args.model,
+        output_dir=args.output_dir,
+        meeting_filter=args.meeting_filter,
+        output_format=args.output_format,
+        top=args.top,
+        min_risk=args.min_risk,
+        audit_profile=args.audit_profile,
+        rebuild_mode=args.rebuild_mode,
+    )
+
+    print(f"Entity: {result['entity']}")
+    print(f"Model: {result['model']}")
+    print(f"Audit profile: {result['audit_profile']}")
+    print(f"Records directory: {result['records_dir']}")
+    print(f"Audit output directory: {result['output_dir']}")
+    print(f"Meetings audited: {result['meeting_count']}")
+    print(f"Meetings with findings: {result['meetings_with_findings']}")
+    print(
+        "Findings: "
+        f"{result['critical_findings']} critical, "
+        f"{result['high_findings']} high, "
+        f"{result['medium_findings']} medium, "
+        f"{result['low_findings']} low"
+    )
+    for report_format, report_path in sorted(result["report_paths"].items()):
+        print(f"{report_format.title()} report: {report_path}")
+
+    if result.get("rebuild_mode"):
+        print(
+            "Rebuild candidates: "
+            f"{result['rebuild_candidate_count']} "
+            f"({result['rebuildable_count']} rebuildable, "
+            f"{result['rebuild_blocked_count']} blocked)"
+        )
+        for candidate in result["rebuild_plan"]["candidates"]:
+            disposition = "rebuildable" if candidate["rebuildable"] else "blocked"
+            print(f"- {candidate['meeting']} ({disposition})")
+            for reason in candidate["reasons"]:
+                print(f"  Reason: {reason['code']} — {reason['message']}")
+            for blocker in candidate.get("blockers", []):
+                print(f"  Blocker: {blocker}")
+        print(f"Rebuild manifest: {result['rebuild_manifest_path']}")
+
+    if result.get("rebuild_execution_summary"):
+        summary = result["rebuild_execution_summary"]
+        print(
+            "Rebuild execution: "
+            f"{summary['attempted']} attempted, "
+            f"{summary['complete']} complete, "
+            f"{summary['incomplete']} incomplete, "
+            f"{summary['failed']} failed, "
+            f"{summary['blocked']} blocked"
+        )
+        print(
+            "Remaining rebuild candidates: "
+            f"{result['remaining_rebuild_candidate_count']}"
+        )
+    return 0
+
 
 def handle_intel_run(args: argparse.Namespace) -> int:
     """
@@ -365,6 +649,8 @@ def handle_intel_records(args: argparse.Namespace) -> int:
         context=args.context,
         print_prompts=args.print_prompts,
         force=args.force,
+        align_timestamps=args.align_timestamps,
+        timestamp_only=args.timestamp_only,
     )
 
     if result.get("mode") == "print_prompts":
@@ -380,6 +666,54 @@ def handle_intel_records(args: argparse.Namespace) -> int:
             print()
         return 0
 
+    if result.get("mode") == "timestamp_only":
+        print("Mode: forced timestamp realignment only")
+        print(f"Input directory: {result['input_dir']}")
+        print(f"Output directory: {result['output_dir']}")
+        print(f"Timestamp embedding model: {result['embedding_model']}")
+        print(f"Discovered transcripts: {result['discovered']}")
+        print(
+            "Existing records artifacts: "
+            f"{result['existing_records_artifacts']}"
+        )
+        print(f"Aligned records artifacts: {result['aligned']}")
+        print(f"Reused timestamp alignments: {result['alignment_reused']}")
+        print(f"Skipped records artifacts: {result['skipped']}")
+        print(f"Failed timestamp alignments: {result['failed']}")
+
+        for item in result["results"]:
+            print(f"- {item['base_name']}")
+            print(f"  JSON: {item['output_path']}")
+            if item["records_artifact_status"] == "existing":
+                print(f"  Markdown: {item['markdown_path']}")
+                print(f"  Records: {item['record_count']}")
+            else:
+                print(
+                    "  Records artifact: "
+                    f"{item['records_artifact_status']}"
+                )
+            print(
+                "  Timestamp alignment: "
+                f"{item['timestamp_alignment_status']}"
+            )
+            print(
+                "  Timestamp detail: "
+                f"{item['timestamp_alignment_message']}"
+            )
+            if item["timestamp_alignment_status"] in {"complete", "reused"}:
+                print(
+                    "  Timestamp matches: "
+                    f"{item['timestamp_matched_record_count']} matched, "
+                    f"{item['timestamp_ambiguous_record_count']} ambiguous, "
+                    f"{item['timestamp_unmatched_record_count']} unmatched"
+                )
+                if item.get("timestamp_alignment_path"):
+                    print(
+                        "  Timestamp report: "
+                        f"{item['timestamp_alignment_path']}"
+                    )
+        return 0
+
     print(f"Input directory: {result['input_dir']}")
     print(f"Output directory: {result['output_dir']}")
     print(f"Provider: {result['llm_provider']}")
@@ -388,13 +722,21 @@ def handle_intel_records(args: argparse.Namespace) -> int:
     print(f"Discovered transcripts: {result['discovered']}")
     print(f"Extracted transcripts: {result['extracted']}")
     print(f"Reused transcripts: {result['reused']}")
+    if result.get("timestamp_alignment_requested"):
+        print(f"Timestamp embedding model: {result['embedding_model']}")
 
     for item in result["results"]:
         print(f"- {item['base_name']}")
         print(f"  JSON: {item['output_path']}")
         print(f"  Markdown: {item['markdown_path']}")
         if item.get("reused"):
-            print("  Reused: compatible records artifact")
+            if item.get("reuse_mode") == "timestamp_only":
+                print(
+                    "  Reused: existing complete records artifact "
+                    "for timestamp enrichment"
+                )
+            else:
+                print("  Reused: normalized source hash matched")
 
         print(f"  Status: {item['status']}")
         print(f"  Meeting type: {item['meeting_type']}")
@@ -404,8 +746,33 @@ def handle_intel_records(args: argparse.Namespace) -> int:
             f"successful ({item['partial_chunk_count']} partial, "
             f"{item['failed_chunk_count']} failed)"
         )
-        print(f"  Validation issues: {item['validation_issue_count']}")
+        if item["status"] == "complete":
+            print(f"  Validation warnings: {item['validation_warning_count']}")
+        else:
+            print(f"  Validation issues: {item['validation_issue_count']}")
+        if item["normalized_record_count"]:
+            print(f"  Normalized record types: {item['normalized_record_count']}")
+        if item["rejected_record_count"]:
+            print(f"  Rejected records: {item['rejected_record_count']}")
+        if item["rejected_line_count"]:
+            print(f"  Rejected JSONL lines: {item['rejected_line_count']}")
         print(f"  Records: {item['record_count']}")
+        alignment_status = item.get("timestamp_alignment_status")
+        if alignment_status and alignment_status != "not_requested":
+            print(f"  Timestamp alignment: {alignment_status}")
+            print(f"  Timestamp detail: {item['timestamp_alignment_message']}")
+            if alignment_status in {"complete", "reused"}:
+                print(
+                    "  Timestamp matches: "
+                    f"{item['timestamp_matched_record_count']} matched, "
+                    f"{item['timestamp_ambiguous_record_count']} ambiguous, "
+                    f"{item['timestamp_unmatched_record_count']} unmatched"
+                )
+                if item.get("timestamp_alignment_path"):
+                    print(
+                        "  Timestamp report: "
+                        f"{item['timestamp_alignment_path']}"
+                    )
         print(
             f"  Tokens: in={item['input_tokens']} "
             f"out={item['output_tokens']} total={item['total_tokens']}"

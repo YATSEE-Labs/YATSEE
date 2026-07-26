@@ -13,16 +13,26 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from yatsee.core.errors import ConfigError, ValidationError
-from yatsee.core.hashing import compute_json_sha256, compute_text_sha256
+from yatsee.core.format import format_markdown_inline, format_timestamp
+from yatsee.core.hashing import compute_text_sha256
 from yatsee.core.io import ensure_directory, read_text, write_text, write_text_atomic
-from yatsee.core.paths import resolve_contained_path, sanitize_path_component
-from yatsee.intel.classifier import classify_transcript
+from yatsee.core.paths import (
+    resolve_contained_path,
+    sanitize_path_component,
+    serialize_project_path,
+)
+from yatsee.intel.classifier import (
+    classify_transcript,
+    resolve_single_classifier_label,
+)
 from yatsee.intel.llm import (
     GeneratedChunk,
     LLMRuntime,
@@ -38,6 +48,7 @@ from yatsee.intel.prompts import (
     resolve_records_prompt_id,
 )
 from yatsee.intel.resolve import extract_context_from_filename, resolve_record_paths
+from yatsee.intel.schema import ALLOWED_RECORD_TYPES
 from yatsee.intel.speakers import build_name_permutations
 from yatsee.providers.pricing import build_pricing_summary
 from yatsee.providers.tokenization import estimate_token_count
@@ -46,10 +57,11 @@ logger = logging.getLogger(__name__)
 
 ARTIFACT_KIND = "records"
 ARTIFACT_SCHEMA_VERSION = "civic_records_v1"
-EXTRACTION_VERSION = "records_v2"
+EXTRACTION_VERSION = "records_v3"
 FINAL_SUFFIX = ".records.json"
 PARTIAL_SUFFIX = ".records.partial.json"
 MARKDOWN_SUFFIX = ".records.md"
+ALIGNMENT_SUFFIX = ".records.alignment.json"
 PARTIAL_MARKDOWN_SUFFIX = ".records.partial.md"
 
 RECORD_SECTION_ORDER = (
@@ -90,26 +102,7 @@ RECORD_TYPE_SECTIONS = {
     "other": "Other",
 }
 
-ALLOWED_RECORD_TYPES = {
-    "attendance",
-    "procedural_action",
-    "presentation",
-    "discussion",
-    "motion",
-    "vote",
-    "public_comment",
-    "financial",
-    "metric",
-    "ordinance",
-    "resolution",
-    "contract",
-    "project",
-    "appointment",
-    "proclamation",
-    "recognition",
-    "follow_up",
-    "other",
-}
+VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
 
 @dataclass(frozen=True)
@@ -133,83 +126,6 @@ class RecordsRunConfig:
     show_pricing: bool
     pricing_provider: str | None
     pricing_model: str | None
-
-
-def build_records_extraction_metadata(
-    *,
-    llm_runtime: LLMRuntime,
-    run_cfg: RecordsRunConfig,
-    job_profile: str,
-    context: str,
-    classifier_bundle: Dict[str, Any],
-    records_bundle: Dict[str, Any],
-    density_keywords: set[str],
-    entity_cfg: Dict[str, Any],
-) -> Dict[str, str]:
-    """
-    Build stable metadata describing every records extraction input.
-
-    The resulting fingerprint intentionally excludes output paths, credentials,
-    pricing settings, logging options, and provider target URLs. Those values do
-    not change the requested extraction semantics and should not force expensive
-    model work to repeat.
-
-    :param llm_runtime: Resolved provider runtime
-    :param run_cfg: Records-specific runtime settings
-    :param job_profile: Prompt profile name
-    :param context: Resolved transcript context included in prompts
-    :param classifier_bundle: Loaded classifier bundle
-    :param records_bundle: Loaded records prompt bundle
-    :param density_keywords: Density keywords passed to the chunker
-    :param entity_cfg: Resolved entity configuration
-    :return: Component hashes and the combined extraction fingerprint
-    """
-    classifier_payload = {
-        "classifier_prompt": classifier_bundle["classifier_prompt"],
-        "allowed_meeting_types": classifier_bundle["allowed_meeting_types"],
-    }
-    records_prompt_payload = {
-        "records_router": records_bundle["records_router"],
-        "prompts": records_bundle["prompts"],
-    }
-    density_payload = sorted(density_keywords)
-    entity_context_payload = build_name_permutations(entity_cfg)
-
-    classifier_sha256 = compute_json_sha256(classifier_payload)
-    records_prompt_sha256 = compute_json_sha256(records_prompt_payload)
-    density_keywords_sha256 = compute_json_sha256(density_payload)
-    entity_context_sha256 = compute_json_sha256(entity_context_payload)
-    context_sha256 = compute_text_sha256(context)
-
-    fingerprint_payload = {
-        "extraction_version": EXTRACTION_VERSION,
-        "schema_version": ARTIFACT_SCHEMA_VERSION,
-        "job_profile": job_profile,
-        "provider": llm_runtime.provider_name,
-        "model": llm_runtime.model,
-        "num_ctx": llm_runtime.num_ctx,
-        "max_output_tokens": llm_runtime.max_output_tokens,
-        "temperature": llm_runtime.temperature,
-        "chunk_style": run_cfg.chunk_style,
-        "chunk_max_tokens": run_cfg.max_tokens,
-        "disable_auto_classification": run_cfg.disable_auto_classification,
-        "meeting_type_override": run_cfg.meeting_type,
-        "context": context,
-        "classifier_sha256": classifier_sha256,
-        "records_prompt_sha256": records_prompt_sha256,
-        "density_keywords_sha256": density_keywords_sha256,
-        "entity_context_sha256": entity_context_sha256,
-    }
-
-    return {
-        "extraction_version": EXTRACTION_VERSION,
-        "extraction_fingerprint": compute_json_sha256(fingerprint_payload),
-        "classifier_sha256": classifier_sha256,
-        "records_prompt_sha256": records_prompt_sha256,
-        "density_keywords_sha256": density_keywords_sha256,
-        "entity_context_sha256": entity_context_sha256,
-        "context_sha256": context_sha256,
-    }
 
 
 def _strip_json_fence(text: str) -> str:
@@ -255,13 +171,20 @@ def _clean_value(value: Any) -> Any:
     return value
 
 
-def _normalize_record(raw_record: Any, record_index: int) -> Dict[str, Any]:
+def _normalize_record(
+    raw_record: Any,
+    record_index: int,
+) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
     """
     Validate and normalize one model-produced record.
 
     :param raw_record: Parsed JSON value for one record
     :param record_index: One-based record position for diagnostics
-    :return: Normalized record dictionary
+    Unsupported non-empty model types are retained safely as ``other`` with the
+    original value preserved in attributes. This keeps otherwise grounded
+    records while making the deterministic schema authoritative.
+
+    :return: Normalized record dictionary and non-fatal normalization warnings
     :raises ValidationError: If the record does not satisfy the schema
     """
     if not isinstance(raw_record, dict):
@@ -269,17 +192,11 @@ def _normalize_record(raw_record: Any, record_index: int) -> Dict[str, Any]:
 
     cleaned = _clean_value(raw_record)
     raw_record_type = cleaned.get("record_type")
-    record_type = (
-        raw_record_type.strip().lower().replace(" ", "_")
-        if isinstance(raw_record_type, str)
-        else raw_record_type
-    )
-    if record_type not in ALLOWED_RECORD_TYPES:
-        allowed = ", ".join(sorted(ALLOWED_RECORD_TYPES))
+    if not isinstance(raw_record_type, str) or not raw_record_type.strip():
         raise ValidationError(
-            f"Record {record_index} has invalid record_type '{record_type}'. "
-            f"Allowed values: {allowed}"
+            f"Record {record_index} must define a non-empty 'record_type' string"
         )
+    record_type = raw_record_type.strip().lower().replace(" ", "_")
 
     for key in ("subject", "summary", "evidence"):
         if not isinstance(cleaned.get(key), str) or not cleaned[key].strip():
@@ -291,6 +208,27 @@ def _normalize_record(raw_record: Any, record_index: int) -> Dict[str, Any]:
     if attributes and not isinstance(attributes, dict):
         raise ValidationError(f"Record {record_index} attributes must be an object")
     attributes = dict(attributes or {})
+
+    normalization_issues: List[Dict[str, Any]] = []
+    if record_type not in ALLOWED_RECORD_TYPES:
+        # Model-produced labels are untrusted. Preserve the useful record and
+        # original label without allowing it to expand the stable schema.
+        attributes.setdefault("model_record_type", record_type)
+        normalization_issues.append(
+            {
+                "scope": "record",
+                "record_index": record_index,
+                "severity": "warning",
+                "action": "normalized",
+                "error": (
+                    f"Record {record_index} has unsupported record_type "
+                    f"'{record_type}'; normalized to 'other'"
+                ),
+                "original_record_type": record_type,
+                "normalized_record_type": "other",
+            }
+        )
+        record_type = "other"
 
     attribution = cleaned.get("attribution")
     if attribution is None:
@@ -317,7 +255,7 @@ def _normalize_record(raw_record: Any, record_index: int) -> Dict[str, Any]:
     if attributes:
         normalized["attributes"] = _clean_value(attributes)
 
-    return normalized
+    return normalized, normalization_issues
 
 
 def _parse_records_response_with_issues(
@@ -376,6 +314,8 @@ def _parse_records_response_with_issues(
                     {
                         "scope": "line",
                         "line_number": line_number,
+                        "severity": "warning",
+                        "action": "rejected",
                         "error": (
                             "Records JSONL line is not valid JSON: "
                             f"{exc.msg} at column {exc.colno}"
@@ -390,6 +330,8 @@ def _parse_records_response_with_issues(
                     {
                         "scope": "line",
                         "line_number": line_number,
+                        "severity": "warning",
+                        "action": "rejected",
                         "error": "Records JSONL line must be a JSON object",
                         "rejected_line": _clean_value(raw_record),
                     }
@@ -403,11 +345,21 @@ def _parse_records_response_with_issues(
         start=1,
     ):
         try:
-            normalized_records.append(_normalize_record(raw_record, record_index))
+            normalized_record, normalization_issues = _normalize_record(
+                raw_record,
+                record_index,
+            )
+            normalized_records.append(normalized_record)
+            for issue in normalization_issues:
+                if line_number is not None:
+                    issue["line_number"] = line_number
+                validation_issues.append(issue)
         except ValidationError as exc:
             issue = {
                 "scope": "record",
                 "record_index": record_index,
+                "severity": "warning",
+                "action": "rejected",
                 "error": str(exc),
                 "rejected_record": _clean_value(raw_record),
             }
@@ -433,8 +385,13 @@ def parse_records_response(raw_output: str) -> List[Dict[str, Any]]:
     :raises ValidationError: If JSON or any record field is invalid
     """
     records, validation_issues = _parse_records_response_with_issues(raw_output)
-    if validation_issues:
-        raise ValidationError(validation_issues[0]["error"])
+    rejected_issues = [
+        issue
+        for issue in validation_issues
+        if issue.get("action") == "rejected"
+    ]
+    if rejected_issues:
+        raise ValidationError(rejected_issues[0]["error"])
     return records
 
 
@@ -504,6 +461,10 @@ def _artifact_paths(output_dir: str, base_name: str) -> Dict[str, str]:
             transcript_dir,
             f"{safe_base_name}{PARTIAL_MARKDOWN_SUFFIX}",
         ),
+        "alignment_path": resolve_contained_path(
+            transcript_dir,
+            f"{safe_base_name}{ALIGNMENT_SUFFIX}",
+        ),
     }
 
 
@@ -535,23 +496,258 @@ def _prepare_artifact_directory(paths: Dict[str, str]) -> None:
         ensure_directory(directory)
 
 
+def _resolve_record_segments_path(
+    *,
+    entity_cfg: Dict[str, Any],
+    transcript_path: str,
+    base_name: str,
+) -> str | None:
+    """
+    Resolve an optional sliced segment artifact for one normalized transcript.
+
+    Entity runs prefer the configured transcription directory. Direct-path runs
+    may place the segment JSONL beside the supplied transcript. Missing segment
+    files are normal because timestamp alignment is optional enrichment.
+
+    :param entity_cfg: Resolved entity configuration
+    :param transcript_path: Normalized transcript path
+    :param base_name: Transcript basename
+    :return: Existing segment JSONL path or ``None``
+    """
+    filename = f"{base_name}.segments.jsonl"
+    candidates: List[str] = []
+
+    data_path = entity_cfg.get("data_path")
+    transcription_model = (
+        entity_cfg.get("transcription_model")
+        or entity_cfg.get("default_transcription_model")
+    )
+    if isinstance(data_path, str) and data_path and transcription_model:
+        candidates.append(
+            os.path.join(
+                data_path,
+                f"transcripts_{transcription_model}",
+                filename,
+            )
+        )
+
+    candidates.append(os.path.join(os.path.dirname(transcript_path), filename))
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        resolved = os.path.abspath(candidate)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if os.path.isfile(resolved):
+            return resolved
+    return None
+
+
+def _timestamp_result_metadata(
+    *,
+    status: str,
+    message: str,
+    alignment_path: str | None = None,
+    metadata: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """
+    Build consistent per-meeting timestamp alignment result metadata.
+
+    :param status: Alignment execution status
+    :param message: Human-readable status detail
+    :param alignment_path: Optional diagnostic sidecar path
+    :param metadata: Optional compact alignment metadata
+    :return: Result fields for CLI reporting
+    """
+    metadata = metadata or {}
+    return {
+        "timestamp_alignment_status": status,
+        "timestamp_alignment_message": message,
+        "timestamp_alignment_path": alignment_path,
+        "timestamp_matched_record_count": metadata.get(
+            "matched_record_count",
+            0,
+        ),
+        "timestamp_ambiguous_record_count": metadata.get(
+            "ambiguous_record_count",
+            0,
+        ),
+        "timestamp_unmatched_record_count": metadata.get(
+            "unmatched_record_count",
+            0,
+        ),
+    }
+
+
+def _enrich_records_with_timestamps(
+    *,
+    artifact: Dict[str, Any],
+    paths: Dict[str, str],
+    transcript_path: str,
+    base_name: str,
+    entity_cfg: Dict[str, Any],
+    embedding_model: str,
+    project_root: str = ".",
+    force_realign: bool = False,
+) -> tuple[Dict[str, Any], Dict[str, Any], bool]:
+    """
+    Best-effort enrich one complete records artifact with source timestamps.
+
+    Missing or invalid segment artifacts do not downgrade records extraction.
+    The source records remain usable and the caller receives a compact skip or
+    failure status. Matching details are written to a separate diagnostic
+    sidecar only after alignment succeeds.
+
+    :param artifact: Complete records artifact
+    :param paths: Resolved records artifact paths
+    :param transcript_path: Normalized transcript path
+    :param base_name: Transcript basename
+    :param entity_cfg: Resolved entity configuration
+    :param embedding_model: Configured SentenceTransformer model
+    :param project_root: Directory containing the active ``yatsee.toml``
+    :param force_realign: Whether to bypass compatible alignment reuse
+    :return: Artifact, result metadata, and whether the artifact changed
+    """
+    segments_path = _resolve_record_segments_path(
+        entity_cfg=entity_cfg,
+        transcript_path=transcript_path,
+        base_name=base_name,
+    )
+    if segments_path is None:
+        return (
+            artifact,
+            _timestamp_result_metadata(
+                status="skipped",
+                message="matching segments JSONL not found",
+            ),
+            False,
+        )
+
+    try:
+        from yatsee.intel.timestamp import (
+            RecordTimestampConfig,
+            align_records_artifact,
+            alignment_is_current,
+        )
+
+        config = RecordTimestampConfig(model_name=embedding_model)
+        segment_path_obj = Path(segments_path)
+
+        if (
+            not force_realign
+            and os.path.isfile(paths["alignment_path"])
+            and alignment_is_current(
+                artifact=artifact,
+                segments_path=segment_path_obj,
+                config=config,
+            )
+        ):
+            try:
+                report = json.loads(read_text(paths["alignment_path"]))
+                if not isinstance(report, dict):
+                    raise ValueError("alignment report must be a JSON object")
+                expected_inputs = {
+                    "segments": serialize_project_path(
+                        segments_path,
+                        project_root,
+                    ),
+                    "records": serialize_project_path(
+                        paths["final_path"],
+                        project_root,
+                    ),
+                }
+                if report.get("inputs") != expected_inputs:
+                    report["inputs"] = expected_inputs
+                    write_text_atomic(
+                        paths["alignment_path"],
+                        json.dumps(
+                            report,
+                            indent=2,
+                            ensure_ascii=False,
+                        ) + "\n",
+                    )
+                metadata = artifact.get("timestamp_alignment", {})
+                return (
+                    artifact,
+                    _timestamp_result_metadata(
+                        status="reused",
+                        message="compatible timestamp alignment reused",
+                        alignment_path=paths["alignment_path"],
+                        metadata=metadata,
+                    ),
+                    False,
+                )
+            except (OSError, ValueError, TypeError) as exc:
+                logger.warning(
+                    "Rebuilding unreadable timestamp alignment report '%s': %s",
+                    paths["alignment_path"],
+                    exc,
+                )
+
+        outcome = align_records_artifact(
+            artifact=artifact,
+            segments_path=segment_path_obj,
+            config=config,
+            segments_label=serialize_project_path(
+                segments_path,
+                project_root,
+            ),
+            records_label=serialize_project_path(
+                paths["final_path"],
+                project_root,
+            ),
+        )
+        write_text_atomic(
+            paths["alignment_path"],
+            json.dumps(outcome.report, indent=2, ensure_ascii=False) + "\n",
+        )
+        return (
+            outcome.artifact,
+            _timestamp_result_metadata(
+                status="complete",
+                message="record evidence aligned to timestamped segments",
+                alignment_path=paths["alignment_path"],
+                metadata=outcome.metadata,
+            ),
+            True,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Timestamp alignment skipped for '%s': %s",
+            base_name,
+            exc,
+        )
+        return (
+            artifact,
+            _timestamp_result_metadata(
+                status="failed",
+                message=str(exc),
+            ),
+            False,
+        )
+
+
 def load_reusable_records_artifact(
     path: str,
     *,
     source_sha256: str,
-    extraction_fingerprint: str,
 ) -> Dict[str, Any] | None:
     """
-    Load a complete final artifact when it matches the current extraction inputs.
+    Load an existing records artifact when its normalized source is unchanged.
 
-    Invalid, legacy, partial, or stale artifacts are treated as cache misses. A
-    cache miss is not an error because the records workflow can rebuild the
-    artifact from the normalized transcript.
+    Prompt, classifier, model, profile, schema, extraction version, status, and
+    chunk metadata are provenance only. Operators explicitly request a rebuild
+    with ``--force`` when those inputs change. A source hash mismatch is the only
+    automatic cache invalidator.
+
+    Existing files that cannot support deterministic reuse fail clearly instead
+    of silently triggering expensive model work.
 
     :param path: Final records JSON path
-    :param source_sha256: Hash of the normalized transcript text
-    :param extraction_fingerprint: Hash of extraction-relevant settings
-    :return: Reusable artifact or ``None``
+    :param source_sha256: Hash of the current normalized transcript text
+    :return: Reusable artifact, or ``None`` when missing or source-changed
+    :raises ConfigError: When an existing artifact is unreadable or unusable
     """
     if not os.path.isfile(path):
         return None
@@ -559,55 +755,104 @@ def load_reusable_records_artifact(
     try:
         artifact = json.loads(read_text(path))
     except (ConfigError, json.JSONDecodeError) as exc:
-        logger.warning("Ignoring unreadable records cache '%s': %s", path, exc)
+        raise ConfigError(
+            f"Existing records artifact '{path}' is unreadable; "
+            "rerun with --force to replace it"
+        ) from exc
+
+    if not isinstance(artifact, dict):
+        raise ConfigError(
+            f"Existing records artifact '{path}' is not a JSON object; "
+            "rerun with --force to replace it"
+        )
+    if not isinstance(artifact.get("records"), list):
+        raise ConfigError(
+            f"Existing records artifact '{path}' lacks a records list; "
+            "rerun with --force to replace it"
+        )
+
+    stored_source_sha256 = artifact.get("source_sha256")
+    if not isinstance(stored_source_sha256, str) or not stored_source_sha256:
+        raise ConfigError(
+            f"Existing records artifact '{path}' lacks source_sha256; "
+            "rerun with --force to replace it"
+        )
+    if stored_source_sha256 != source_sha256:
+        return None
+
+    return artifact
+
+
+def _artifact_count(
+    artifact: Dict[str, Any],
+    key: str,
+    default: int = 0,
+) -> int:
+    """
+    Read a non-negative integer artifact field without making it a reuse gate.
+
+    :param artifact: Existing records artifact
+    :param key: Artifact field name
+    :param default: Value returned for missing or invalid fields
+    :return: Non-negative integer value
+    """
+    value = artifact.get(key)
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return default
+
+
+
+def load_timestamp_reusable_records_artifact(
+    path: str,
+) -> Dict[str, Any] | None:
+    """
+    Load an existing records artifact for timestamp-only alignment.
+
+    Timestamp alignment is intentionally independent from extraction cache
+    validity. Historical schema versions, partial extraction metadata, source
+    hashes, prompt fingerprints, and chunk counters must not trigger an LLM
+    rebuild. The only required contract is a JSON object containing a records
+    list whose entries are objects with non-empty evidence strings.
+
+    :param path: Final records JSON path
+    :return: Timestamp-alignable artifact or ``None``
+    """
+    if not os.path.isfile(path):
+        return None
+
+    try:
+        artifact = json.loads(read_text(path))
+    except (ConfigError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "Ignoring unreadable records artifact '%s' during timestamp alignment: %s",
+            path,
+            exc,
+        )
         return None
 
     if not isinstance(artifact, dict):
         return None
-    if artifact.get("artifact_kind") != ARTIFACT_KIND:
-        return None
-    if artifact.get("schema_version") != ARTIFACT_SCHEMA_VERSION:
-        return None
-    if artifact.get("extraction_version") != EXTRACTION_VERSION:
-        return None
-    if artifact.get("status") != "complete":
-        return None
-    if artifact.get("source_sha256") != source_sha256:
-        return None
-    if artifact.get("extraction_fingerprint") != extraction_fingerprint:
-        return None
-
     records = artifact.get("records")
     if not isinstance(records, list):
         return None
-    if artifact.get("record_count") != len(records):
-        return None
-    for record in records:
-        if not isinstance(record, dict):
-            return None
-        if record.get("record_type") not in ALLOWED_RECORD_TYPES:
-            return None
-        for key in ("subject", "summary", "evidence"):
-            if not isinstance(record.get(key), str) or not record[key].strip():
-                return None
-        source_chunks = record.get("source_chunks")
-        if not isinstance(source_chunks, list) or not source_chunks:
-            return None
-        if not all(isinstance(chunk_id, int) and chunk_id > 0 for chunk_id in source_chunks):
-            return None
 
-    chunk_count = artifact.get("chunk_count")
-    successful_chunk_count = artifact.get("successful_chunk_count")
-    if not isinstance(chunk_count, int) or chunk_count < 1:
-        return None
-    if successful_chunk_count != chunk_count:
-        return None
-    if artifact.get("partial_chunk_count") != 0:
-        return None
-    if artifact.get("failed_chunk_count") != 0:
-        return None
-    if artifact.get("validation_issue_count") != 0:
-        return None
+    for record_index, record in enumerate(records, start=1):
+        if not isinstance(record, dict):
+            logger.warning(
+                "Ignoring records artifact '%s': record %d is not an object",
+                path,
+                record_index,
+            )
+            return None
+        evidence = record.get("evidence")
+        if not isinstance(evidence, str) or not evidence.strip():
+            logger.warning(
+                "Ignoring records artifact '%s': record %d lacks evidence",
+                path,
+                record_index,
+            )
+            return None
 
     return artifact
 
@@ -620,6 +865,27 @@ def _record_section(record_type: str) -> str:
     :return: Human-readable section heading
     """
     return RECORD_TYPE_SECTIONS.get(record_type, "Other")
+
+
+
+def _record_timestamp_markdown(record: Dict[str, Any]) -> str | None:
+    """
+    Build a timestamp display or timestamped YouTube link for one record.
+
+    :param record: Structured record
+    :return: Markdown value or ``None`` when no valid timestamp exists
+    """
+    timestamp = record.get("timestamp")
+    if not isinstance(timestamp, (int, float)):
+        return None
+
+    display = format_timestamp(float(timestamp))
+    video_id = record.get("video_id")
+    if isinstance(video_id, str) and VIDEO_ID_RE.fullmatch(video_id):
+        seconds = max(0, int(float(timestamp)))
+        url = f"https://www.youtube.com/watch?v={video_id}&t={seconds}s"
+        return f"[{display}]({url})"
+    return display
 
 
 def render_records_markdown(artifact: Dict[str, Any]) -> str:
@@ -668,10 +934,10 @@ def render_records_markdown(artifact: Dict[str, Any]) -> str:
 
         lines.extend([f"## {section}", ""])
         for record in section_records:
-            subject = str(record.get("subject", "Untitled record")).strip()
-            summary = str(record.get("summary", "")).strip()
-            evidence = str(record.get("evidence", "")).strip()
-            attribution = str(record.get("attribution", "")).strip()
+            subject = format_markdown_inline(record.get("subject", "Untitled record"))
+            summary = format_markdown_inline(record.get("summary", ""))
+            evidence = format_markdown_inline(record.get("evidence", ""))
+            attribution = format_markdown_inline(record.get("attribution", ""))
             source_chunks = record.get("source_chunks", [])
 
             lines.append(f"- **{subject}**")
@@ -681,6 +947,9 @@ def render_records_markdown(artifact: Dict[str, Any]) -> str:
                 lines.append(f"  - Attribution: {attribution}")
             if evidence:
                 lines.append(f"  - Evidence: “{evidence}”")
+            timestamp_markdown = _record_timestamp_markdown(record)
+            if timestamp_markdown:
+                lines.append(f"  - Source timestamp: {timestamp_markdown}")
             if isinstance(source_chunks, list) and source_chunks:
                 rendered_chunks = ", ".join(str(chunk) for chunk in source_chunks)
                 lines.append(f"  - Source chunks: {rendered_chunks}")
@@ -704,6 +973,38 @@ def write_records_markdown(
     :return: None
     """
     write_text_atomic(path, render_records_markdown(artifact))
+
+
+def _count_validation_actions(
+    validation_issues: Iterable[Dict[str, Any]],
+) -> Dict[str, int]:
+    """
+    Count deterministic handling outcomes for model validation issues.
+
+    :param validation_issues: Validation and normalization diagnostics
+    :return: Warning, normalization, rejected-record, and rejected-line counts
+    """
+    issues = list(validation_issues)
+    return {
+        "validation_warning_count": sum(
+            issue.get("severity") == "warning" for issue in issues
+        ),
+        "normalized_record_count": sum(
+            issue.get("scope") == "record"
+            and issue.get("action") == "normalized"
+            for issue in issues
+        ),
+        "rejected_record_count": sum(
+            issue.get("scope") == "record"
+            and issue.get("action") == "rejected"
+            for issue in issues
+        ),
+        "rejected_line_count": sum(
+            issue.get("scope") == "line"
+            and issue.get("action") == "rejected"
+            for issue in issues
+        ),
+    }
 
 
 def _write_generated_record_chunk(
@@ -747,9 +1048,10 @@ def _write_generated_record_chunk(
         records, validation_issues = _parse_records_response_with_issues(
             generated_chunk.output
         )
-        if validation_issues and records:
-            status = "partial"
-        elif validation_issues:
+        # Isolated record or line defects are warnings when usable sibling
+        # records remain. A chunk fails only when the response yields no usable
+        # records and was not the explicit empty-record response.
+        if validation_issues and not records:
             status = "failed"
         else:
             status = "complete"
@@ -759,6 +1061,8 @@ def _write_generated_record_chunk(
         validation_issues = [
             {
                 "scope": "chunk",
+                "severity": "error",
+                "action": "rejected",
                 "error": str(exc),
             }
         ]
@@ -766,15 +1070,27 @@ def _write_generated_record_chunk(
     parsed_chunks[generated_chunk.chunk_id] = records
     chunk_statuses[generated_chunk.chunk_id] = status
     chunk_validation_issues[generated_chunk.chunk_id] = validation_issues
+    validation_counts = _count_validation_actions(validation_issues)
 
     if validation_issues:
-        logger.warning(
-            "Records chunk %d/%d completed with status %s and %d validation issue(s)",
-            generated_chunk.chunk_id,
-            generated_chunk.chunk_count,
-            status,
-            len(validation_issues),
-        )
+        if status == "complete":
+            logger.warning(
+                "Records chunk %d/%d completed with %d validation warning(s) "
+                "(%d normalized, %d records rejected, %d lines rejected)",
+                generated_chunk.chunk_id,
+                generated_chunk.chunk_count,
+                validation_counts["validation_warning_count"],
+                validation_counts["normalized_record_count"],
+                validation_counts["rejected_record_count"],
+                validation_counts["rejected_line_count"],
+            )
+        else:
+            logger.warning(
+                "Records chunk %d/%d failed with %d validation issue(s)",
+                generated_chunk.chunk_id,
+                generated_chunk.chunk_count,
+                len(validation_issues),
+            )
         write_text(
             error_path,
             json.dumps(
@@ -784,6 +1100,7 @@ def _write_generated_record_chunk(
                     "prompt_id": prompt_id,
                     "status": status,
                     "validation_issue_count": len(validation_issues),
+                    **validation_counts,
                     "validation_issues": validation_issues,
                 },
                 indent=2,
@@ -801,6 +1118,7 @@ def _write_generated_record_chunk(
                 "prompt_id": prompt_id,
                 "status": status,
                 "validation_issue_count": len(validation_issues),
+                **validation_counts,
                 "validation_issues": validation_issues,
                 "source_text": generated_chunk.source_text,
                 "records": records,
@@ -827,7 +1145,9 @@ def extract_records_from_transcript(
     output_dir: str,
     job_profile: str,
     source_sha256: str,
-    extraction_metadata: Dict[str, str],
+    align_timestamps: bool = False,
+    embedding_model: str = "BAAI/bge-small-en-v1.5",
+    project_root: str = ".",
 ) -> Dict[str, Any]:
     """
     Extract and deterministically consolidate records from one transcript.
@@ -846,7 +1166,9 @@ def extract_records_from_transcript(
     :param output_dir: Root records output directory
     :param job_profile: Prompt profile name
     :param source_sha256: Hash of the normalized transcript text
-    :param extraction_metadata: Stable extraction hashes and fingerprint
+    :param align_timestamps: Whether to run optional timestamp enrichment
+    :param embedding_model: Configured SentenceTransformer model
+    :param project_root: Directory containing the active ``yatsee.toml``
     :return: Records result metadata
     """
     usage = TokenUsage()
@@ -863,22 +1185,32 @@ def extract_records_from_transcript(
     elif run_cfg.disable_auto_classification:
         meeting_type = "general"
     else:
-        classifier_prompt_template = classifier_bundle["classifier_prompt"]
         allowed_meeting_types = classifier_bundle["allowed_meeting_types"]
-        classifier_prompt = classifier_prompt_template.format(
-            context=context,
-            text=transcript[:2000],
-        )
-        meeting_type = classify_transcript(
-            session=session,
-            runtime=llm_runtime,
-            prompt=classifier_prompt,
-            allowed_labels=set(allowed_meeting_types),
-        )
-        usage.add(
-            input_tokens=estimate_token_count(classifier_prompt),
-            output_tokens=estimate_token_count(meeting_type),
-        )
+        allowed_labels = set(allowed_meeting_types)
+        single_label = resolve_single_classifier_label(allowed_labels)
+
+        if single_label:
+            meeting_type = single_label
+            logger.info(
+                "Selected sole configured meeting type without classification: %s",
+                meeting_type,
+            )
+        else:
+            classifier_prompt_template = classifier_bundle["classifier_prompt"]
+            classifier_prompt = classifier_prompt_template.format(
+                context=context,
+                text=transcript[:2000],
+            )
+            meeting_type = classify_transcript(
+                session=session,
+                runtime=llm_runtime,
+                prompt=classifier_prompt,
+                allowed_labels=allowed_labels,
+            )
+            usage.add(
+                input_tokens=estimate_token_count(classifier_prompt),
+                output_tokens=estimate_token_count(meeting_type),
+            )
 
     prompt_id = resolve_records_prompt_id(meeting_type, records_router)
     prompt_template = records_bundle["prompts"][prompt_id]
@@ -933,28 +1265,41 @@ def extract_records_from_transcript(
     validation_issue_count = sum(
         len(issues) for issues in chunk_validation_issues.values()
     )
+    validation_counts = _count_validation_actions(
+        issue
+        for issues in chunk_validation_issues.values()
+        for issue in issues
+    )
     status = (
         "complete"
         if chunk_count > 0
         and successful_chunk_count == chunk_count
         and partial_chunk_count == 0
         and failed_chunk_count == 0
-        and validation_issue_count == 0
         else "partial"
     )
 
     final_artifact = {
         "artifact_kind": ARTIFACT_KIND,
         "schema_version": ARTIFACT_SCHEMA_VERSION,
-        **extraction_metadata,
+        "extraction_version": EXTRACTION_VERSION,
         "status": status,
-        "source_transcript": transcript_path,
+        "source_transcript": serialize_project_path(
+            transcript_path,
+            project_root,
+        ),
         "source_sha256": source_sha256,
         "meeting_type": meeting_type,
         "job_profile": job_profile,
         "prompt_id": prompt_id,
-        "classifier_file": classifier_bundle["path"],
-        "prompt_file": records_bundle["path"],
+        "classifier_file": serialize_project_path(
+            classifier_bundle["path"],
+            project_root,
+        ),
+        "prompt_file": serialize_project_path(
+            records_bundle["path"],
+            project_root,
+        ),
         "provider": llm_runtime.provider_name,
         "model": llm_runtime.model,
         "num_ctx": llm_runtime.num_ctx,
@@ -966,9 +1311,33 @@ def extract_records_from_transcript(
         "partial_chunk_count": partial_chunk_count,
         "failed_chunk_count": failed_chunk_count,
         "validation_issue_count": validation_issue_count,
+        **validation_counts,
         "record_count": len(consolidated),
         "records": consolidated,
     }
+
+    timestamp_result = _timestamp_result_metadata(
+        status=("skipped" if align_timestamps else "not_requested"),
+        message=(
+            "records extraction was not complete"
+            if align_timestamps
+            else "timestamp alignment was not requested"
+        ),
+    )
+    if status == "complete" and align_timestamps:
+        (
+            final_artifact,
+            timestamp_result,
+            _,
+        ) = _enrich_records_with_timestamps(
+            artifact=final_artifact,
+            paths=paths,
+            transcript_path=transcript_path,
+            base_name=base_name,
+            entity_cfg=entity_cfg,
+            embedding_model=embedding_model,
+            project_root=project_root,
+        )
 
     if status == "complete":
         output_path = paths["final_path"]
@@ -990,6 +1359,19 @@ def extract_records_from_transcript(
                 logger.warning(
                     "Failed to remove stale partial records artifact '%s': %s",
                     stale_partial_path,
+                    exc,
+                )
+        if not align_timestamps or timestamp_result["timestamp_alignment_status"] in {
+            "skipped",
+            "failed",
+        }:
+            try:
+                if os.path.isfile(paths["alignment_path"]):
+                    os.unlink(paths["alignment_path"])
+            except OSError as exc:
+                logger.warning(
+                    "Failed to remove stale timestamp alignment artifact '%s': %s",
+                    paths["alignment_path"],
                     exc,
                 )
         cache_updated = True
@@ -1025,6 +1407,7 @@ def extract_records_from_transcript(
         "partial_chunk_count": partial_chunk_count,
         "failed_chunk_count": failed_chunk_count,
         "validation_issue_count": validation_issue_count,
+        **validation_counts,
         "record_count": len(consolidated),
         "input_tokens": usage.input_tokens,
         "output_tokens": usage.output_tokens,
@@ -1033,6 +1416,159 @@ def extract_records_from_transcript(
         "cache_updated": cache_updated,
         "reused": False,
         "skipped": False,
+        **timestamp_result,
+    }
+
+
+def _run_timestamp_alignment_only(
+    *,
+    resolved: Dict[str, Any],
+    entity_cfg: Dict[str, Any],
+    embedding_model: str,
+    project_root: str,
+) -> Dict[str, Any]:
+    """
+    Recalculate timestamps for existing records without running extraction.
+
+    This stage boundary is deliberate. Timestamp enrichment is deterministic
+    downstream work over already-generated records. Missing, unreadable, or
+    historically incompatible records artifacts are reported and skipped rather
+    than routed back into prompt loading, provider resolution, chunk generation,
+    or LLM execution.
+
+    :param resolved: Resolved records input and output paths
+    :param entity_cfg: Resolved entity configuration
+    :param embedding_model: Configured SentenceTransformer model
+    :param project_root: Directory containing the active ``yatsee.toml``
+    :return: Forced timestamp-realignment-only result metadata
+    """
+    results: List[Dict[str, Any]] = []
+    existing_count = 0
+    aligned_count = 0
+    reused_alignment_count = 0
+    skipped_count = 0
+    failed_count = 0
+
+    for file_path in resolved["file_list"]:
+        base_name = os.path.splitext(os.path.basename(file_path))[0]
+        paths = _artifact_paths(resolved["output_dir"], base_name)
+        artifact_exists = os.path.isfile(paths["final_path"])
+        artifact = load_timestamp_reusable_records_artifact(
+            paths["final_path"],
+        )
+
+        if artifact is None:
+            skipped_count += 1
+            message = (
+                "records artifact is unreadable or lacks a usable records/evidence structure"
+                if artifact_exists
+                else "records artifact not found"
+            )
+            results.append(
+                {
+                    "base_name": base_name,
+                    "output_path": paths["final_path"],
+                    "markdown_path": paths["markdown_path"],
+                    "records_artifact_status": "unusable" if artifact_exists else "missing",
+                    "record_count": 0,
+                    "timestamp_alignment_status": "skipped",
+                    "timestamp_alignment_message": message,
+                    "timestamp_alignment_path": None,
+                    "timestamp_matched_record_count": 0,
+                    "timestamp_ambiguous_record_count": 0,
+                    "timestamp_unmatched_record_count": 0,
+                }
+            )
+            continue
+
+        existing_count += 1
+
+        # Keep serialized paths portable without rewriting extraction identity
+        # or consulting current prompts, models, hashes, and chunk settings.
+        current_path_metadata = {
+            "source_transcript": serialize_project_path(
+                file_path,
+                project_root,
+            ),
+        }
+        for key in ("classifier_file", "prompt_file"):
+            value = artifact.get(key)
+            if isinstance(value, str) and value.strip():
+                current_path_metadata[key] = serialize_project_path(
+                    value,
+                    project_root,
+                )
+
+        artifact_changed = any(
+            artifact.get(key) != value
+            for key, value in current_path_metadata.items()
+        )
+        if artifact_changed:
+            artifact.update(current_path_metadata)
+
+        artifact, timestamp_result, timestamp_changed = (
+            _enrich_records_with_timestamps(
+                artifact=artifact,
+                paths=paths,
+                transcript_path=file_path,
+                base_name=base_name,
+                entity_cfg=entity_cfg,
+                embedding_model=embedding_model,
+                project_root=project_root,
+                force_realign=True,
+            )
+        )
+        artifact_changed = artifact_changed or timestamp_changed
+
+        if artifact_changed:
+            write_text_atomic(
+                paths["final_path"],
+                json.dumps(
+                    artifact,
+                    indent=2,
+                    ensure_ascii=False,
+                ) + "\n",
+            )
+        write_records_markdown(artifact, paths["markdown_path"])
+
+        alignment_status = timestamp_result["timestamp_alignment_status"]
+        if alignment_status == "complete":
+            aligned_count += 1
+        elif alignment_status == "reused":
+            reused_alignment_count += 1
+        elif alignment_status == "failed":
+            failed_count += 1
+        else:
+            skipped_count += 1
+
+        results.append(
+            {
+                "base_name": base_name,
+                "output_path": paths["final_path"],
+                "markdown_path": paths["markdown_path"],
+                "records_artifact_status": "existing",
+                "record_count": len(artifact["records"]),
+                **timestamp_result,
+            }
+        )
+
+    return {
+        "mode": "timestamp_only",
+        "artifact_kind": ARTIFACT_KIND,
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
+        "input_dir": resolved["input_dir"],
+        "output_dir": resolved["output_dir"],
+        "discovered": len(resolved["file_list"]),
+        "existing_records_artifacts": existing_count,
+        "extracted": 0,
+        "reused": existing_count,
+        "aligned": aligned_count,
+        "alignment_reused": reused_alignment_count,
+        "skipped": skipped_count,
+        "failed": failed_count,
+        "timestamp_alignment_requested": True,
+        "embedding_model": embedding_model,
+        "results": results,
     }
 
 
@@ -1059,6 +1595,8 @@ def run_records_stage(
     context: str = "",
     print_prompts: bool = False,
     force: bool = False,
+    align_timestamps: bool = False,
+    timestamp_only: bool = False,
 ) -> Dict[str, Any]:
     """
     Run structured records extraction across normalized transcript files.
@@ -1083,8 +1621,24 @@ def run_records_stage(
     :param meeting_type: Optional explicit records route
     :param context: Optional additional meeting context
     :param print_prompts: Whether to return records prompts without execution
+    :param force: Whether to rebuild records regardless of normalized source hash
+    :param align_timestamps: Whether to align reused and newly extracted records
+    :param timestamp_only: Whether to force-realign existing records without extraction
     :return: Records-stage result metadata
     """
+    if align_timestamps and timestamp_only:
+        raise ConfigError(
+            "--align-timestamps cannot be combined with --timestamp-only"
+        )
+    if force and timestamp_only:
+        raise ConfigError(
+            "--force cannot be combined with --timestamp-only"
+        )
+    if print_prompts and (align_timestamps or timestamp_only):
+        raise ConfigError(
+            "--print-prompts cannot be combined with timestamp alignment options"
+        )
+
     resolved = resolve_record_paths(
         global_config_path,
         entity=entity,
@@ -1094,9 +1648,27 @@ def run_records_stage(
         max_words=max_words,
         max_tokens=max_tokens,
     )
+    project_root = str(
+        Path(global_config_path).expanduser().resolve().parent
+    )
     global_cfg = resolved["global_cfg"]
     entity_cfg = resolved["entity_cfg"]
     system_cfg = global_cfg.get("system", {})
+    embedding_model = (
+        entity_cfg.get("embedding_model")
+        or system_cfg.get(
+            "default_embedding_model",
+            "BAAI/bge-small-en-v1.5",
+        )
+    )
+
+    if timestamp_only:
+        return _run_timestamp_alignment_only(
+            resolved=resolved,
+            entity_cfg=entity_cfg,
+            embedding_model=embedding_model,
+            project_root=project_root,
+        )
 
     classifier_bundle = load_classifier_bundle(entity_cfg, job_profile)
     summary_bundle = load_summary_prompt_bundle(entity_cfg, job_profile)
@@ -1109,11 +1681,20 @@ def run_records_stage(
         return {
             "mode": "print_prompts",
             "job_profile": job_profile,
-            "classifier_file": classifier_bundle["path"],
+            "classifier_file": serialize_project_path(
+                classifier_bundle["path"],
+                project_root,
+            ),
             "used_fallback_classifier": classifier_bundle["fallback"],
             "classifier_prompt": classifier_bundle["classifier_prompt"],
-            "prompt_file": records_bundle["path"],
-            "density_prompt_file": summary_bundle["path"],
+            "prompt_file": serialize_project_path(
+                records_bundle["path"],
+                project_root,
+            ),
+            "density_prompt_file": serialize_project_path(
+                summary_bundle["path"],
+                project_root,
+            ),
             "density_keywords": sorted(density_keywords),
             "records_router": records_bundle["records_router"],
             "prompts": records_bundle["prompts"],
@@ -1164,42 +1745,52 @@ def run_records_stage(
         transcript = read_text(file_path)
         resolved_context = extract_context_from_filename(file_path, context)
         source_sha256 = compute_text_sha256(transcript)
-        extraction_metadata = build_records_extraction_metadata(
-            llm_runtime=llm_runtime,
-            run_cfg=run_cfg,
-            job_profile=job_profile,
-            context=resolved_context,
-            classifier_bundle=classifier_bundle,
-            records_bundle=records_bundle,
-            density_keywords=density_keywords,
-            entity_cfg=entity_cfg,
-        )
         paths = _artifact_paths(resolved["output_dir"], base_name)
 
         reusable_artifact = None
+        reuse_mode = None
         if not force:
             reusable_artifact = load_reusable_records_artifact(
                 paths["final_path"],
                 source_sha256=source_sha256,
-                extraction_fingerprint=extraction_metadata[
-                    "extraction_fingerprint"
-                ],
             )
+            if reusable_artifact is not None:
+                reuse_mode = "source_match"
 
         if reusable_artifact is not None:
-            # The content identity is unchanged, but paths may move between
-            # equivalent direct-path runs. Refresh descriptive path metadata
-            # without invalidating or rerunning the extraction.
+            # Preserve extraction provenance while keeping the source path portable.
             current_path_metadata = {
-                "source_transcript": file_path,
-                "classifier_file": classifier_bundle["path"],
-                "prompt_file": records_bundle["path"],
+                "source_transcript": serialize_project_path(
+                    file_path,
+                    project_root,
+                ),
             }
-            if any(
+            artifact_changed = any(
                 reusable_artifact.get(key) != value
                 for key, value in current_path_metadata.items()
-            ):
+            )
+            if artifact_changed:
                 reusable_artifact.update(current_path_metadata)
+
+            timestamp_result = _timestamp_result_metadata(
+                status="not_requested",
+                message="timestamp alignment was not requested",
+            )
+            if align_timestamps:
+                reusable_artifact, timestamp_result, timestamp_changed = (
+                    _enrich_records_with_timestamps(
+                        artifact=reusable_artifact,
+                        paths=paths,
+                        transcript_path=file_path,
+                        base_name=base_name,
+                        entity_cfg=entity_cfg,
+                        embedding_model=embedding_model,
+                        project_root=project_root,
+                    )
+                )
+                artifact_changed = artifact_changed or timestamp_changed
+
+            if artifact_changed:
                 write_text_atomic(
                     paths["final_path"],
                     json.dumps(
@@ -1210,32 +1801,67 @@ def run_records_stage(
                 )
             write_records_markdown(reusable_artifact, paths["markdown_path"])
             reused_count += 1
+            validation_issue_count = _artifact_count(
+                reusable_artifact,
+                "validation_issue_count",
+            )
             results_by_index[file_index] = {
                 "base_name": base_name,
-                "meeting_type": reusable_artifact["meeting_type"],
-                "prompt_id": reusable_artifact["prompt_id"],
+                "meeting_type": reusable_artifact.get(
+                    "meeting_type",
+                    "unknown",
+                ),
+                "prompt_id": reusable_artifact.get(
+                    "prompt_id",
+                    "unknown",
+                ),
                 "output_path": paths["final_path"],
                 "markdown_path": paths["markdown_path"],
-                "status": reusable_artifact["status"],
-                "chunk_count": reusable_artifact["chunk_count"],
-                "successful_chunk_count": reusable_artifact[
-                    "successful_chunk_count"
-                ],
-                "partial_chunk_count": reusable_artifact[
-                    "partial_chunk_count"
-                ],
-                "failed_chunk_count": reusable_artifact["failed_chunk_count"],
-                "validation_issue_count": reusable_artifact[
-                    "validation_issue_count"
-                ],
-                "record_count": reusable_artifact["record_count"],
+                "status": reusable_artifact.get("status", "unknown"),
+                "chunk_count": _artifact_count(
+                    reusable_artifact,
+                    "chunk_count",
+                ),
+                "successful_chunk_count": _artifact_count(
+                    reusable_artifact,
+                    "successful_chunk_count",
+                ),
+                "partial_chunk_count": _artifact_count(
+                    reusable_artifact,
+                    "partial_chunk_count",
+                ),
+                "failed_chunk_count": _artifact_count(
+                    reusable_artifact,
+                    "failed_chunk_count",
+                ),
+                "validation_issue_count": validation_issue_count,
+                "validation_warning_count": _artifact_count(
+                    reusable_artifact,
+                    "validation_warning_count",
+                    validation_issue_count,
+                ),
+                "normalized_record_count": _artifact_count(
+                    reusable_artifact,
+                    "normalized_record_count",
+                ),
+                "rejected_record_count": _artifact_count(
+                    reusable_artifact,
+                    "rejected_record_count",
+                ),
+                "rejected_line_count": _artifact_count(
+                    reusable_artifact,
+                    "rejected_line_count",
+                ),
+                "record_count": len(reusable_artifact["records"]),
                 "input_tokens": 0,
                 "output_tokens": 0,
                 "total_tokens": 0,
                 "pricing": {"enabled": False},
                 "cache_updated": False,
                 "reused": True,
+                "reuse_mode": reuse_mode,
                 "skipped": True,
+                **timestamp_result,
             }
             continue
 
@@ -1247,7 +1873,6 @@ def run_records_stage(
                 "transcript": transcript,
                 "context": resolved_context,
                 "source_sha256": source_sha256,
-                "extraction_metadata": extraction_metadata,
             }
         )
 
@@ -1269,7 +1894,9 @@ def run_records_stage(
                     output_dir=resolved["output_dir"],
                     job_profile=job_profile,
                     source_sha256=job["source_sha256"],
-                    extraction_metadata=job["extraction_metadata"],
+                    align_timestamps=align_timestamps,
+                    embedding_model=embedding_model,
+                    project_root=project_root,
                 )
                 results_by_index[job["file_index"]] = result
 
@@ -1286,13 +1913,24 @@ def run_records_stage(
         "output_dir": resolved["output_dir"],
         "llm_provider": llm_runtime.provider_name,
         "model": llm_runtime.model,
-        "classifier_file": classifier_bundle["path"],
+        "classifier_file": serialize_project_path(
+            classifier_bundle["path"],
+            project_root,
+        ),
         "used_fallback_classifier": classifier_bundle["fallback"],
-        "prompt_file": records_bundle["path"],
-        "density_prompt_file": summary_bundle["path"],
+        "prompt_file": serialize_project_path(
+            records_bundle["path"],
+            project_root,
+        ),
+        "density_prompt_file": serialize_project_path(
+            summary_bundle["path"],
+            project_root,
+        ),
         "density_keyword_count": len(density_keywords),
         "discovered": len(results),
         "extracted": len(pending_jobs),
         "reused": reused_count,
+        "timestamp_alignment_requested": align_timestamps,
+        "embedding_model": embedding_model if align_timestamps else None,
         "results": results,
     }
