@@ -226,15 +226,6 @@ def _validate_classifier_bundle(bundle: Dict[str, Any]) -> None:
     classifier_prompt = bundle.get("classifier_prompt")
     allowed_meeting_types = bundle.get("allowed_meeting_types")
 
-    if not isinstance(classifier_prompt, str) or not classifier_prompt.strip():
-        raise ConfigError("Classifier bundle must define non-empty prompt text")
-
-    for required_placeholder in ("{context}", "{text}"):
-        if required_placeholder not in classifier_prompt:
-            raise ConfigError(
-                "Classifier prompt must contain both {context} and {text} placeholders"
-            )
-
     if not isinstance(allowed_meeting_types, list) or not allowed_meeting_types:
         raise ConfigError("Classifier bundle must define at least one allowed type")
 
@@ -249,6 +240,24 @@ def _validate_classifier_bundle(bundle: Dict[str, Any]) -> None:
 
     if "general" not in allowed_meeting_types:
         raise ConfigError("Classifier allowed types must include 'general'")
+
+    # A single configured label is deterministic and does not require prompt
+    # text. Multi-label classifiers still require a complete model prompt.
+    if len(allowed_meeting_types) == 1:
+        if classifier_prompt is not None and not isinstance(classifier_prompt, str):
+            raise ConfigError("Classifier prompt must be a string when provided")
+        return
+
+    if not isinstance(classifier_prompt, str) or not classifier_prompt.strip():
+        raise ConfigError(
+            "Classifier bundles with multiple allowed types must define non-empty prompt text"
+        )
+
+    for required_placeholder in ("{context}", "{text}"):
+        if required_placeholder not in classifier_prompt:
+            raise ConfigError(
+                "Classifier prompt must contain both {context} and {text} placeholders"
+            )
 
 
 def load_classifier_bundle(

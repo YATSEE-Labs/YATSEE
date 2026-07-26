@@ -10,7 +10,10 @@ from functools import partial
 from typing import Any, Dict
 
 from yatsee.core.errors import ConfigError
-from yatsee.intel.classifier import classify_transcript
+from yatsee.intel.classifier import (
+    classify_transcript,
+    resolve_single_classifier_label,
+)
 from yatsee.intel.llm import (
     GeneratedChunk,
     LLMRuntime,
@@ -181,7 +184,6 @@ def summarize_one_transcript(
     """
     prompts = prompt_bundle["prompts"]
     prompt_lookup = prompt_bundle["prompt_router"]
-    classifier_prompt_template = classifier_bundle["classifier_prompt"]
     allowed_meeting_types = classifier_bundle["allowed_meeting_types"]
     density_keywords_cfg = prompt_bundle["density_keywords"]
 
@@ -189,22 +191,33 @@ def summarize_one_transcript(
 
     meeting_type = "general"
     if not run_cfg.disable_auto_classification:
-        classifier_prompt = classifier_prompt_template.format(
-            context=context,
-            text=transcript[:2000],
-        )
-        meeting_type = classify_transcript(
-            session=session,
-            runtime=llm_runtime,
-            prompt=classifier_prompt,
-            allowed_labels=set(allowed_meeting_types),
-        )
+        allowed_labels = set(allowed_meeting_types)
+        single_label = resolve_single_classifier_label(allowed_labels)
 
-        usage.add(
-            input_tokens=estimate_token_count(classifier_prompt),
-            output_tokens=estimate_token_count(meeting_type),
-        )
-        logger.info("Auto-detected meeting type: %s", meeting_type)
+        if single_label:
+            meeting_type = single_label
+            logger.info(
+                "Selected sole configured meeting type without classification: %s",
+                meeting_type,
+            )
+        else:
+            classifier_prompt_template = classifier_bundle["classifier_prompt"]
+            classifier_prompt = classifier_prompt_template.format(
+                context=context,
+                text=transcript[:2000],
+            )
+            meeting_type = classify_transcript(
+                session=session,
+                runtime=llm_runtime,
+                prompt=classifier_prompt,
+                allowed_labels=allowed_labels,
+            )
+
+            usage.add(
+                input_tokens=estimate_token_count(classifier_prompt),
+                output_tokens=estimate_token_count(meeting_type),
+            )
+            logger.info("Auto-detected meeting type: %s", meeting_type)
 
     prompt_ids = resolve_summary_prompt_ids(
         meeting_type=meeting_type,

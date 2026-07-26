@@ -16,12 +16,11 @@ from yatsee.core.config import load_entity_config, load_global_config
 from yatsee.core.discovery import discover_files
 from yatsee.core.errors import ValidationError
 from yatsee.core.io import ensure_directory
-from yatsee.core.paths import sanitize_path_component
+from yatsee.intel.layout import resolve_intel_layout
 
 TRANSCRIPT_INPUT_EXTENSIONS = (".txt",)
 TRANSCRIPT_EXCLUDE_SUFFIXES = ("punct.txt",)
 DEFAULT_TRANSCRIPT_INPUT_DIRNAME = "normalized"
-DEFAULT_RECORD_OUTPUT_DIRNAME = "records"
 
 
 def extract_context_from_filename(
@@ -68,7 +67,7 @@ def resolve_transcript_stage_paths(
     entity_cfg: Dict[str, Any],
     input_path: str | None,
     output_dir: str | None,
-    default_output_dirname: str,
+    default_output_dir: str | None,
 ) -> Dict[str, Any]:
     """
     Resolve normalized transcript inputs and an intelligence artifact directory.
@@ -81,7 +80,7 @@ def resolve_transcript_stage_paths(
     :param entity_cfg: Loaded entity configuration dictionary
     :param input_path: Optional transcript file or directory override
     :param output_dir: Optional artifact output directory override
-    :param default_output_dirname: Entity-relative output directory name
+    :param default_output_dir: Resolved entity-backed output directory
     :return: Resolved input path, output directory, entity data path, and files
     :raises ValidationError: If required paths or entity configuration are missing
     """
@@ -98,10 +97,9 @@ def resolve_transcript_stage_paths(
         data_path,
         DEFAULT_TRANSCRIPT_INPUT_DIRNAME,
     )
-    resolved_output_dir = output_dir or os.path.join(
-        data_path,
-        default_output_dirname,
-    )
+    resolved_output_dir = output_dir or default_output_dir
+    if not resolved_output_dir:
+        raise ValidationError("No output directory could be resolved")
     file_list = discover_files(
         resolved_input_path,
         TRANSCRIPT_INPUT_EXTENSIONS,
@@ -143,6 +141,35 @@ def _resolve_model_profile(
         )
 
     return model_key, model_map[model_key]
+
+
+def resolve_records_model(
+    global_cfg: Dict[str, Any],
+    entity_cfg: Dict[str, Any],
+    model: str | None,
+) -> tuple[str, str, Dict[str, Any]]:
+    """
+    Resolve records model policy shared by extraction and audit commands.
+
+    :param global_cfg: Loaded global configuration
+    :param entity_cfg: Loaded entity configuration
+    :param model: Optional records model override
+    :return: Resolved model name, configured model key, and model settings
+    :raises ValidationError: If no records model is configured
+    """
+    system_cfg = global_cfg.get("system", {})
+    resolved_model = (
+        model
+        or entity_cfg.get("records_model")
+        or entity_cfg.get("summarization_model")
+        or system_cfg.get("default_records_model")
+        or system_cfg.get("default_summarization_model")
+    )
+    if not resolved_model:
+        raise ValidationError("No records model specified")
+
+    model_key, model_cfg = _resolve_model_profile(global_cfg, resolved_model)
+    return resolved_model, model_key, model_cfg
 
 
 def resolve_summary_paths(
@@ -194,12 +221,19 @@ def resolve_summary_paths(
     if not entity and not output_dir:
         raise ValidationError("Without --entity, --output-dir must be defined")
 
+    intel_layout = (
+        resolve_intel_layout(entity_cfg["data_path"], model_key, model_cfg)
+        if entity
+        else None
+    )
     paths = resolve_transcript_stage_paths(
         entity=entity,
         entity_cfg=entity_cfg,
         input_path=input_path,
         output_dir=output_dir,
-        default_output_dirname=model_cfg["append_dir"],
+        default_output_dir=(
+            intel_layout["summaries_dir"] if intel_layout else None
+        ),
     )
     if not paths["file_list"]:
         raise ValidationError(
@@ -227,6 +261,7 @@ def resolve_summary_paths(
         "input_dir": paths["input_path"],
         "file_list": paths["file_list"],
         "output_dir": paths["output_dir"],
+        "intel_dir": intel_layout["intel_dir"] if intel_layout else None,
         "max_tokens": resolved_max_tokens,
         "num_ctx": num_ctx,
     }
@@ -247,7 +282,7 @@ def resolve_record_paths(
 
     Records may define a dedicated model through ``records_model`` or
     ``default_records_model``. Existing summary model settings remain valid
-    fallbacks so deployments do not require an immediate configuration change.
+    fallbacks while all entity-backed outputs share one model lineage workspace.
 
     :param global_config_path: Path to the global ``yatsee.toml`` file
     :param entity: Optional entity handle
@@ -261,39 +296,34 @@ def resolve_record_paths(
     """
     global_cfg = load_global_config(global_config_path)
     entity_cfg = load_entity_config(global_cfg, entity) if entity else {}
-    system_cfg = global_cfg.get("system", {})
 
     if not entity and not input_path:
         raise ValidationError("Without --entity, --txt-input must be defined")
     if entity and not entity_cfg.get("data_path"):
         raise ValidationError("No entity data_path configured")
 
-    resolved_model = (
-        model
-        or entity_cfg.get("records_model")
-        or entity_cfg.get("summarization_model")
-        or system_cfg.get("default_records_model")
-        or system_cfg.get("default_summarization_model")
+    resolved_model, model_key, model_cfg = resolve_records_model(
+        global_cfg,
+        entity_cfg,
+        model,
     )
-    if not resolved_model:
-        raise ValidationError("No records model specified")
-
-    model_key, model_cfg = _resolve_model_profile(global_cfg, resolved_model)
 
     if not entity and not output_dir:
         raise ValidationError("Without --entity, --output-dir must be defined")
 
-    safe_model_name = sanitize_path_component(model_key.replace(":", "_"))
-    default_output_dirname = model_cfg.get("records_append_dir") or os.path.join(
-        DEFAULT_RECORD_OUTPUT_DIRNAME,
-        safe_model_name,
+    intel_layout = (
+        resolve_intel_layout(entity_cfg["data_path"], model_key, model_cfg)
+        if entity
+        else None
     )
     paths = resolve_transcript_stage_paths(
         entity=entity,
         entity_cfg=entity_cfg,
         input_path=input_path,
         output_dir=output_dir,
-        default_output_dirname=default_output_dirname,
+        default_output_dir=(
+            intel_layout["records_dir"] if intel_layout else None
+        ),
     )
     if not paths["file_list"]:
         raise ValidationError(
@@ -325,6 +355,108 @@ def resolve_record_paths(
         "input_dir": paths["input_path"],
         "file_list": paths["file_list"],
         "output_dir": paths["output_dir"],
+        "intel_dir": intel_layout["intel_dir"] if intel_layout else None,
         "max_tokens": resolved_max_tokens,
         "num_ctx": num_ctx,
+    }
+
+
+def resolve_audit_paths(
+    global_config_path: str,
+    *,
+    entity: str,
+    model: str | None = None,
+    output_dir: str | None = None,
+) -> Dict[str, Any]:
+    """
+    Resolve an entity's model-specific records root and audit output directory.
+
+    Audit intentionally does not discover normalized transcripts or create the
+    records root. It inspects existing artifacts and writes reports beneath a
+    sibling ``audit`` directory beneath the shared model workspace unless the
+    operator supplies an explicit output.
+
+    :param global_config_path: Path to global yatsee.toml
+    :param entity: Entity handle
+    :param model: Optional configured records model override
+    :param output_dir: Optional audit report directory override
+    :return: Resolved configuration and audit paths
+    :raises ValidationError: If entity or records configuration is invalid
+    """
+    global_cfg = load_global_config(global_config_path)
+    entity_cfg = load_entity_config(global_cfg, entity)
+    data_path = entity_cfg.get("data_path")
+    if not data_path:
+        raise ValidationError(f"Entity '{entity}' does not define data_path")
+
+    resolved_model, model_key, model_cfg = resolve_records_model(
+        global_cfg,
+        entity_cfg,
+        model,
+    )
+    intel_layout = resolve_intel_layout(data_path, model_key, model_cfg)
+    records_dir = intel_layout["records_dir"]
+    resolved_output_dir = os.path.abspath(
+        output_dir or intel_layout["audit_dir"]
+    )
+
+    return {
+        "global_cfg": global_cfg,
+        "entity_cfg": entity_cfg,
+        "model": resolved_model,
+        "model_key": model_key,
+        "model_cfg": model_cfg,
+        "intel_dir": intel_layout["intel_dir"],
+        "records_dir": records_dir,
+        "output_dir": resolved_output_dir,
+    }
+
+
+def resolve_event_paths(
+    global_config_path: str,
+    *,
+    entity: str,
+    model: str | None = None,
+    output_dir: str | None = None,
+) -> Dict[str, Any]:
+    """
+    Resolve model-specific records input and deterministic events output paths.
+
+    Events are derived from records rather than normalized transcripts. The
+    default output is the ``events`` child beneath the shared model workspace so
+    source records remain immutable and independently reviewable.
+
+    :param global_config_path: Path to global yatsee.toml
+    :param entity: Entity handle
+    :param model: Optional configured records model override
+    :param output_dir: Optional events output directory override
+    :return: Resolved configuration, records input, and events output paths
+    :raises ValidationError: If entity or records configuration is invalid
+    """
+    global_cfg = load_global_config(global_config_path)
+    entity_cfg = load_entity_config(global_cfg, entity)
+    data_path = entity_cfg.get("data_path")
+    if not data_path:
+        raise ValidationError(f"Entity '{entity}' does not define data_path")
+
+    resolved_model, model_key, model_cfg = resolve_records_model(
+        global_cfg,
+        entity_cfg,
+        model,
+    )
+    intel_layout = resolve_intel_layout(data_path, model_key, model_cfg)
+    records_dir = intel_layout["records_dir"]
+    resolved_output_dir = os.path.abspath(
+        output_dir or intel_layout["events_dir"]
+    )
+
+    return {
+        "global_cfg": global_cfg,
+        "entity_cfg": entity_cfg,
+        "model": resolved_model,
+        "model_key": model_key,
+        "model_cfg": model_cfg,
+        "intel_dir": intel_layout["intel_dir"],
+        "records_dir": records_dir,
+        "output_dir": resolved_output_dir,
     }

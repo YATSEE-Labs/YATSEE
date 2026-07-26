@@ -19,6 +19,8 @@ from yatsee.config_tools.validate import validate_entity_config, validate_global
 from yatsee.core.paths import get_entity_dir, resolve_contained_path
 from yatsee.intel.prompts import (
     discover_summary_prompt_profiles,
+    load_classifier_bundle,
+    load_records_prompt_bundle,
     load_summary_prompt_bundle,
 )
 from yatsee.providers.base import ProviderConfigError
@@ -56,7 +58,46 @@ class CliSmokeTests(unittest.TestCase):
 
         args = parser.parse_args(["intel", "records"])
         self.assertEqual(args.chunk_style, "density")
+        self.assertFalse(args.align_timestamps)
+        self.assertFalse(args.timestamp_only)
         self.assertTrue(callable(args.handler))
+
+        args = parser.parse_args(["intel", "records", "--align-timestamps"])
+        self.assertTrue(args.align_timestamps)
+        self.assertFalse(args.timestamp_only)
+        self.assertTrue(callable(args.handler))
+
+        args = parser.parse_args(["intel", "records", "--timestamp-only"])
+        self.assertFalse(args.align_timestamps)
+        self.assertTrue(args.timestamp_only)
+        self.assertTrue(callable(args.handler))
+
+        args = parser.parse_args(
+            [
+                "intel",
+                "audit",
+                "-e",
+                "test_entity",
+                "--model",
+                "gemma4:e4b",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(args.entity, "test_entity")
+        self.assertEqual(args.output_format, "json")
+        self.assertIsNone(args.rebuild_mode)
+        self.assertTrue(callable(args.handler))
+
+        args = parser.parse_args(
+            ["intel", "audit", "-e", "test_entity", "--rebuild"]
+        )
+        self.assertEqual(args.rebuild_mode, "plan")
+
+        args = parser.parse_args(
+            ["intel", "audit", "-e", "test_entity", "--rebuild-auto"]
+        )
+        self.assertEqual(args.rebuild_mode, "auto")
 
         with self.assertRaises(SystemExit):
             parser.parse_args(["intel", "signals"])
@@ -199,6 +240,34 @@ class PromptBundleTests(unittest.TestCase):
         self.assertIn("general", bundle["prompt_router"])
         self.assertGreater(len(bundle["prompts"]), 0)
 
+    def test_civic_profile_loads_all_prompt_bundles(self) -> None:
+        """
+        The canonical civic profile should support deterministic classification,
+        summaries, and records without entity-local files.
+        """
+        repo_root = Path(__file__).resolve().parents[1]
+        previous_cwd = Path.cwd()
+        try:
+            os.chdir(repo_root)
+            classifier_bundle = load_classifier_bundle(
+                {},
+                "civic",
+                require_prompt_file=True,
+            )
+            summary_bundle = load_summary_prompt_bundle(
+                {},
+                "civic",
+                require_prompt_file=True,
+            )
+            records_bundle = load_records_prompt_bundle({}, "civic")
+        finally:
+            os.chdir(previous_cwd)
+
+        self.assertEqual(classifier_bundle["allowed_meeting_types"], ["general"])
+        self.assertIsNone(classifier_bundle["classifier_prompt"])
+        self.assertEqual(set(summary_bundle["prompt_router"]), {"general"})
+        self.assertEqual(set(records_bundle["records_router"]), {"general"})
+
     def test_profile_names_reject_path_traversal(self) -> None:
         """
         Profile names should not be able to escape the prompt root.
@@ -219,6 +288,7 @@ class PromptBundleTests(unittest.TestCase):
             os.chdir(previous_cwd)
 
         self.assertIn("civic", profiles)
+        self.assertNotIn("civic_general", profiles)
 
 
 if __name__ == "__main__":

@@ -68,12 +68,16 @@ def generate_text(
         cmd.extend(["--max-output-tokens", str(max_output_tokens)])
 
     cmd.extend(["--temperature", str(temperature)])
-    cmd.append(prompt)
+    # Prompts may contain long transcripts or sensitive source material. Codex
+    # accepts ``-`` as an explicit stdin prompt, which avoids exposing the full
+    # prompt in process listings and bypasses operating-system argv limits.
+    cmd.append("-")
 
     try:
         completed = subprocess.run(
             cmd,
             capture_output=True,
+            input=prompt,
             text=True,
             timeout=timeout,
             check=False,

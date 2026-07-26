@@ -17,21 +17,16 @@ from __future__ import annotations
 
 import os
 import shutil
-from typing import Any, Dict, List
+from typing import Any, Dict
 
-from yatsee.core.config import remove_entity_registry_entry, upsert_entity_registry_entry
+from yatsee.core.config import (
+    list_entities,
+    remove_entity_registry_entry,
+    upsert_entity_registry_entry,
+)
 from yatsee.core.errors import ConfigError, EntityNotFoundError, ValidationError
 from yatsee.core.paths import get_entity_dir, get_root_data_dir, validate_entity_handle
 
-
-def list_entities(global_cfg: Dict[str, Any]) -> List[str]:
-    """
-    Return sorted entity handles from the global registry.
-
-    :param global_cfg: Global configuration dictionary
-    :return: Sorted list of entity handles
-    """
-    return sorted(global_cfg.get("entities", {}).keys())
 
 
 def ensure_root_data_dir(global_cfg: Dict[str, Any]) -> str:

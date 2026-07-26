@@ -1,46 +1,5 @@
-# =========================
-# YATSEE Classifier Allowed Types
-# =========================
+# Generic civic profile classification.
+# A single allowed type is resolved deterministically without an LLM call.
+
 [classifier_types]
-allowed = [
-    "city_council",
-    "finance_committee",
-    "committee_of_the_whole",
-    "zoning_committee",
-    "general",
-]
-
-# =========================
-# YATSEE Meeting Classifier
-# =========================
-[classifier_prompt]
-text = """
-You are a routing assistant. Classify this meeting by its formal meeting type.
-
-Context: {context}
-
-Transcript Snippet:
-{text}
-
-Return exactly one of:
-- city_council
-- finance_committee
-- committee_of_the_whole
-- zoning_committee
-- general
-
-Rules:
-1. Classify the formal meeting body, not the subjects discussed.
-2. Prefer an explicitly stated meeting title from Context or the transcript.
-3. A Committee of the Whole meeting remains committee_of_the_whole even when
-   finance, budget, zoning, or appropriation topics are discussed.
-4. Use finance_committee only when the meeting itself is identified as a
-   finance, budget, or appropriation committee meeting.
-5. Use zoning_committee when the meeting itself is identified as zoning,
-   planning, land use, or a related committee meeting.
-6. Use city_council for regular, special, or explicitly identified city council
-   meetings.
-7. Use general when the formal meeting type cannot be determined.
-
-Return only the classification value. Do not include commentary.
-"""
+allowed = ["general"]

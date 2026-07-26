@@ -85,6 +85,32 @@ def resolve_contained_path(root: str | os.PathLike[str], *parts: str) -> str:
     return str(candidate)
 
 
+def serialize_project_path(
+    path: str | os.PathLike[str],
+    project_root: str | os.PathLike[str],
+) -> str:
+    """
+    Serialize a filesystem path relative to the YATSEE project root.
+
+    Generated artifact metadata should remain portable across workstations and
+    repository locations. Paths outside the project root remain explicit via
+    ``..`` components rather than being converted back to absolute paths.
+
+    :param path: Filesystem path to serialize
+    :param project_root: Directory containing the active ``yatsee.toml``
+    :return: POSIX-style project-relative path
+    """
+    root_path = Path(project_root).expanduser().resolve()
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = root_path / candidate
+    relative = os.path.relpath(candidate.resolve(), root_path)
+    normalized = Path(relative).as_posix()
+    if normalized == "." or normalized.startswith("."):
+        return normalized
+    return f"./{normalized}"
+
+
 def get_root_data_dir(cfg: Dict[str, Any]) -> str:
     """
     Resolve the absolute root data directory from configuration.

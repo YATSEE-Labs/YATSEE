@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 
 from yatsee.intel.chunking import prepare_text_chunk_density
+from yatsee.intel.classifier import classify_transcript
 from yatsee.providers.ollama import generate_text
 from yatsee.providers.tokenization import estimate_provider_tokens
 
@@ -150,3 +151,28 @@ def test_density_chunker_does_not_emit_overlap_only_final_chunk() -> None:
 
     assert len(chunks) == 1
     assert chunks[0] == text
+
+
+def test_single_classifier_label_does_not_call_provider(monkeypatch) -> None:
+    """
+    Confirm one-label profiles bypass probabilistic classification entirely.
+
+    :param monkeypatch: Pytest monkeypatch fixture
+    :return: None
+    """
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("classifier provider should not be called")
+
+    monkeypatch.setattr(
+        "yatsee.intel.classifier.llm_generate_with_runtime",
+        fail_if_called,
+    )
+
+    result = classify_transcript(
+        session=None,
+        runtime=None,
+        prompt="",
+        allowed_labels={"general"},
+    )
+
+    assert result == "general"
