@@ -417,9 +417,9 @@ class EventsTests(unittest.TestCase):
 
         self.assertNotIn("outcome", events["events"][0])
 
-    def test_markdown_renders_public_provenance(self) -> None:
+    def test_markdown_renders_reviewable_provenance(self) -> None:
         """
-        Markdown should expose verifiable provenance without internal record IDs.
+        Markdown should expose reviewable provenance without internal record IDs.
         """
         artifact = self._artifact(
             [

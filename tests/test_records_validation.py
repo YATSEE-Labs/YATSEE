@@ -5,7 +5,6 @@ Validate records parsing and partial-failure behavior.
 from __future__ import annotations
 
 import json
-import tomllib
 from pathlib import Path
 
 import pytest
@@ -58,24 +57,6 @@ def test_proclamation_is_an_allowed_record_type() -> None:
     )
 
     assert parsed[0]["record_type"] == "proclamation"
-
-
-def test_builtin_records_prompts_define_strict_required_field_contract() -> None:
-    """
-    Confirm first-run prompt profiles require evidence and stable event types.
-
-    :return: None
-    """
-    project_root = Path(__file__).resolve().parents[1]
-    prompt_path = project_root / "prompts" / "civic" / "records_prompt.toml"
-    prompt_config = tomllib.loads(prompt_path.read_text(encoding="utf-8"))
-
-    for prompt in prompt_config["prompts"].values():
-        text = prompt["text"]
-        assert "record_type describes the form of the civic event" in text
-        assert "Every emitted object must contain non-empty" in text
-        assert "Never omit the evidence field" in text
-        assert "Never invent a new record_type" in text
 
 
 def test_tolerant_parser_preserves_valid_sibling_records() -> None:

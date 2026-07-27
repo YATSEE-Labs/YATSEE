@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 from yatsee.cli.main import build_parser
 from yatsee.core.errors import ValidationError
-from yatsee.intel.audit import run_records_audit
+from yatsee.audit.records import run_records_audit
 
 
 class RecordsAuditTests(unittest.TestCase):
@@ -652,30 +652,30 @@ base = ""
         """
         parser = build_parser()
         args = parser.parse_args(
-            ["intel", "audit", "-e", "test_entity", "--strict"]
+            ["audit", "records", "-e", "test_entity", "--strict"]
         )
         self.assertEqual(args.audit_profile, "strict")
 
         args = parser.parse_args(
-            ["intel", "audit", "-e", "test_entity", "--profile", "balanced"]
+            ["audit", "records", "-e", "test_entity", "--profile", "balanced"]
         )
         self.assertEqual(args.audit_profile, "balanced")
 
         args = parser.parse_args(
-            ["intel", "audit", "-e", "test_entity", "--rebuild"]
+            ["audit", "records", "-e", "test_entity", "--rebuild"]
         )
         self.assertEqual(args.rebuild_mode, "plan")
 
         args = parser.parse_args(
-            ["intel", "audit", "-e", "test_entity", "--rebuild-auto"]
+            ["audit", "records", "-e", "test_entity", "--rebuild-auto"]
         )
         self.assertEqual(args.rebuild_mode, "auto")
 
         with self.assertRaises(SystemExit):
             parser.parse_args(
                 [
-                    "intel",
                     "audit",
+                    "records",
                     "-e",
                     "test_entity",
                     "--rebuild",
@@ -728,8 +728,9 @@ base = ""
                 root
                 / "data"
                 / "test_entity"
-                / "intel_gemma4_e4b"
                 / "audit"
+                / "records"
+                / "gemma4_e4b"
                 / "meetings"
                 / "beta"
             )

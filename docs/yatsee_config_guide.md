@@ -156,24 +156,17 @@ Relevant fields:
 
 | Field | Used by | Meaning |
 |---|---|---|
-| `intel_append_dir` | All intelligence stages | Optional entity-relative model workspace override |
-| `max_tokens` | Summary | Default source chunk token budget |
+| `intel_append_dir` | Records, Events, Summary | Optional entity-relative model workspace override |
+| `max_tokens` | Summary | Default structured-fact chunk token budget |
 | `records_max_tokens` | Records | Default records source chunk budget |
 | `num_ctx` | Both | Provider model context setting and chunk-size guard |
 
 If `intel_append_dir` is absent, entity-backed intelligence stages default to
-`intel_<sanitized-model-name>/` with `summaries/`, `records/`, `events/`, and
-`audit/` children.
+`intel_<sanitized-model-name>/` with `summaries/`, `records/`, and `events/`
+children. Audit reports use the separate entity-level `audit/` tree and are not
+controlled by `intel_append_dir`.
 
-### Summary model precedence
-
-```text
---model
-→ entity summarization_model
-→ system default_summarization_model
-```
-
-### Records model precedence
+### Records and summary lineage model precedence
 
 ```text
 --model
@@ -183,7 +176,7 @@ If `intel_append_dir` is absent, entity-backed intelligence stages default to
 → system default_summarization_model
 ```
 
-Records can therefore start with the summary model configuration and later move to a dedicated model without changing the command contract.
+Records, Events, and summaries currently share one `intel_<model>/` lineage. For `intel summarize`, the resolved model identifies the upstream Records/Events workspace and also performs summary generation. This matches the validated local workflow and prevents summaries from silently reading artifacts from a different model lineage. Separating the source lineage model from the synthesis model is a future extension rather than an implicit configuration behavior.
 
 ## Embedding model resolution
 
@@ -262,11 +255,11 @@ data/<entity>/prompts/<profile>/
 
 Each file resolves independently using entity-local then project precedence. An entity may override only the file it needs.
 
-- `classifier.toml` is shared by summary and records.
-- `prompts.toml` owns summary routing and optional density keywords.
+- `classifier.toml` owns Records meeting-type classification.
+- `prompts.toml` owns Records/Events summary routing and optional density keywords.
 - `records_prompt.toml` owns records extraction routing.
 
-The summary and classifier loaders have built-in fallbacks for non-strict runtime use. Records intentionally has no fallback and fails if its sidecar is missing.
+The classifier loader retains its fallback behavior for Records. Summary orchestration uses the selected profile's existing classifier, Records, and summary contracts. Production summary execution requires a filesystem-backed summary bundle, and Records intentionally has no extraction-prompt fallback.
 
 Validate classifier and summary wiring:
 
@@ -284,17 +277,26 @@ yatsee intel records -e example_board -j civic --print-prompts
 
 ## Path behavior
 
-Entity-backed intelligence runs default to:
+Entity-backed processing defaults to:
 
 ```text
-input:  data/<entity>/normalized/
-summary output: intel_<model>/summaries/
-records output: intel_<model>/records/
-events output: intel_<model>/events/
-audit output: intel_<model>/audit/
+input: data/<entity>/normalized/
+
+summary output: data/<entity>/intel_<model>/summaries/
+records output: data/<entity>/intel_<model>/records/
+events output: data/<entity>/intel_<model>/events/
+
+records audit: data/<entity>/audit/records/<model>/
+transcript audit: data/<entity>/audit/transcript/<transcription-model>/
 ```
 
-Without an entity, commands require explicit input and output paths. Paths used for destructive or generated operations are resolved and checked through shared path helpers.
+Audit output is stage-specific and intentionally separate from the artifact tree
+it inspects. `--output-dir` may override the canonical report directory. For
+standalone intelligence runs, use the explicit paths required by the command:
+Records requires an output directory, while Summary derives a model-specific
+workspace beside the supplied input unless `--output-dir` is provided. Paths used
+for destructive or generated operations are resolved and checked through shared
+path helpers.
 
 ## Practical configuration workflow
 
