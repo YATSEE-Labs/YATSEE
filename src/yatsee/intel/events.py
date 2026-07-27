@@ -1324,6 +1324,53 @@ def _write_indexes(
     return events_jsonl_path, meetings_json_path
 
 
+def generate_events_for_records_artifact(
+    *,
+    records_path: str,
+    output_dir: str,
+    project_root: str,
+    meeting: str | None = None,
+) -> Dict[str, Any]:
+    """
+    Generate and write one deterministic Events artifact from Records.
+
+    This helper is shared by the standalone Events stage and the Summary
+    orchestrator. It keeps deterministic Records-to-Events behavior identical
+    regardless of which command caused the artifact to be refreshed.
+
+    :param records_path: Complete Records artifact path
+    :param output_dir: Events artifact root
+    :param project_root: Project root used for portable source paths
+    :param meeting: Optional meeting/source identifier override
+    :return: Per-source Events generation metadata
+    :raises ConfigError: If artifact output cannot be written
+    :raises ValidationError: If the Records artifact is invalid
+    """
+    records_artifact = _load_records_artifact(records_path)
+    resolved_meeting = meeting or Path(records_path).parent.name
+    safe_meeting = sanitize_path_component(resolved_meeting)
+    artifact = build_events_artifact(
+        records_artifact,
+        meeting=safe_meeting,
+        source_records_artifact=records_path,
+        project_root=project_root,
+    )
+    paths = _meeting_output_paths(output_dir, safe_meeting)
+    ensure_directory(paths["meeting_dir"])
+    write_events_artifacts(
+        artifact,
+        json_path=paths["json_path"],
+        markdown_path=paths["markdown_path"],
+    )
+    return {
+        "meeting": safe_meeting,
+        "records_path": records_path,
+        "json_path": paths["json_path"],
+        "markdown_path": paths["markdown_path"],
+        "artifact": artifact,
+    }
+
+
 def run_events_stage(
     global_config_path: str,
     *,
@@ -1369,28 +1416,13 @@ def run_events_stage(
     skipped: List[Dict[str, str]] = []
     for meeting, records_path in discovered:
         try:
-            records_artifact = _load_records_artifact(records_path)
-            artifact = build_events_artifact(
-                records_artifact,
-                meeting=meeting,
-                source_records_artifact=records_path,
-                project_root=project_root,
-            )
-            paths = _meeting_output_paths(resolved["output_dir"], meeting)
-            ensure_directory(paths["meeting_dir"])
-            write_events_artifacts(
-                artifact,
-                json_path=paths["json_path"],
-                markdown_path=paths["markdown_path"],
-            )
             results.append(
-                {
-                    "meeting": meeting,
-                    "records_path": records_path,
-                    "json_path": paths["json_path"],
-                    "markdown_path": paths["markdown_path"],
-                    "artifact": artifact,
-                }
+                generate_events_for_records_artifact(
+                    records_path=records_path,
+                    output_dir=resolved["output_dir"],
+                    project_root=project_root,
+                    meeting=meeting,
+                )
             )
         except (ConfigError, ValidationError) as exc:
             skipped.append({"meeting": meeting, "reason": str(exc)})

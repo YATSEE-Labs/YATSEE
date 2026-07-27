@@ -2,8 +2,9 @@
 Shared filesystem layout helpers for model-specific intelligence artifacts.
 
 Entity-backed intelligence stages share one model lineage root named
-``intel_<sanitized-model>``. Probabilistic records and summaries, deterministic
-events, and audit reports remain separate artifact families beneath that root.
+``intel_<sanitized-model>``. Probabilistic records and summaries and
+deterministic events remain separate artifact families beneath that root. Audit
+reports live at the entity root.
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ INTEL_ARTIFACT_DIRECTORIES = {
     "summaries": "summaries",
     "records": "records",
     "events": "events",
-    "audit": "audit",
 }
 
 

@@ -12,6 +12,7 @@ import argparse
 import sys
 
 from yatsee.cli.audio import register_audio_commands
+from yatsee.cli.audit import register_audit_commands
 from yatsee.cli.config import register_config_commands
 from yatsee.cli.intel import register_intel_commands
 from yatsee.cli.transcript import register_transcript_commands
@@ -40,6 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     register_config_commands(subparsers)
     register_audio_commands(subparsers)
+    register_audit_commands(subparsers)
     register_transcript_commands(subparsers)
     register_intel_commands(subparsers)
 
