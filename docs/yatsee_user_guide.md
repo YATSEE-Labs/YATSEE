@@ -1,6 +1,6 @@
 # YATSEE User Guide
 
-This guide covers the shortest reliable path from local media to transcripts, summaries, and records. Use command `--help` output for the complete option reference.
+This guide covers the shortest reliable path from local media to transcripts, Records, Events, summaries, and artifact audits. Use command `--help` output for the complete option reference.
 
 ## 1. Preflight
 
@@ -10,6 +10,7 @@ yatsee --help
 yatsee config --help
 yatsee audio --help
 yatsee transcript --help
+yatsee audit --help
 yatsee intel --help
 ```
 
@@ -91,24 +92,38 @@ yatsee audio transcribe -e example_county_board --faster --get-chunks
 
 The output is VTT under `transcripts_<model>/`. Existing transcripts are normally skipped.
 
-## 6. Optional transcript QA
+## 6. Optional transcript audit
 
 For large batches, inspect VTTs before generating downstream artifacts:
 
 ```bash
-python scripts/qa_transcript_report.py --details
-python scripts/qa_transcript_report.py --json qa_report.json
+yatsee audit transcript \
+  -e example_county_board \
+  --model medium
 ```
 
-Reset only reviewed failures, starting with a dry run:
+The command writes deterministic reports to:
+
+```text
+data/example_county_board/audit/transcript/medium/report.json
+data/example_county_board/audit/transcript/medium/report.md
+```
+
+Reset only `block` and `rerun` transcripts by default, starting with a dry run:
 
 ```bash
-python scripts/qa_reset_vtt_for_rebuild.py \
-  --entity example_county_board \
-  --qa-report qa_report.json
+yatsee audit transcript reset \
+  -e example_county_board \
+  --model medium
 ```
 
-Add `--apply`, then rerun transcription, only after confirming the matched files and tracker updates.
+Add `--apply`, then rerun transcription, only after confirming the matched VTT
+files and tracker updates. Timing review candidates remain informational unless
+a file also receives an ASR-loop status requiring review or retranscription.
+
+Suppressed cues can be reviewed through `yatsee audit transcript restore`. The
+restore workflow writes a CSV first and inserts only rows explicitly marked
+`action=restore`; file changes still require `--apply`.
 
 ## 7. Slice VTT into transcript artifacts
 
@@ -147,26 +162,12 @@ yatsee transcript normalize -e example_county_board --no-spacy --force
 
 Inspect normalized text before tuning prompts or models.
 
-## 9. Generate summaries
+The normal end-to-end path can proceed directly to `yatsee intel summarize`,
+which ensures Records and refreshes Events before writing summaries. The next
+three sections document those stages independently for inspection, targeted runs,
+and corpus QA.
 
-```bash
-yatsee intel summarize -e example_county_board -j civic
-```
-
-Summary processing classifies the meeting, selects a `first / multi / final` route, and uses additional reduction passes only when needed.
-
-Useful controls:
-
-```bash
-yatsee intel summarize -e example_county_board --print-prompts
-yatsee intel summarize -e example_county_board --enable-chunk-writer
-yatsee intel summarize -e example_county_board --disable-auto-classification
-yatsee intel summarize -e example_county_board --chunk-style sentence --max-tokens 2500
-```
-
-`yatsee intel run` remains a compatibility alias.
-
-## 10. Extract structured records
+## 9. Extract structured records
 
 ```bash
 yatsee intel records \
@@ -242,7 +243,31 @@ Behavior to know:
 - Timestamp alignment has its own fingerprint and diagnostic sidecar, so matcher changes do not invalidate the records extraction cache.
 - Records runs are not resumable at the chunk level yet.
 - Invalid records are isolated and reported while valid sibling records continue. A malformed JSONL line marks its chunk partial; an empty or unusable response marks the chunk failed. Later chunks continue, and the attempt is written as `.records.partial.json` and `.records.partial.md` without replacing a prior complete artifact.
-- The civic profile supports records. The research profile currently has no `records_prompt.toml` and will fail clearly.
+- The civic profile supports Records. Any profile without `records_prompt.toml` fails clearly.
+
+## 10. Audit structured Records
+
+Run the deterministic Records audit after extraction when a corpus-level QA
+report is useful:
+
+```bash
+yatsee audit records \
+  -e example_county_board \
+  --model gemma4:e4b \
+  --profile balanced
+```
+
+The default audit is deterministic and does not invoke an LLM. It writes CSV,
+JSON, and Markdown reports under:
+
+```text
+data/example_county_board/audit/records/gemma4_e4b/
+```
+
+Use `--profile strict` for more sensitive review. Rebuild planning is explicit:
+`--rebuild` writes a manifest and stops without invoking an LLM, while
+`--rebuild-auto` invokes Records generation only for structurally justified
+candidates before rerunning the audit.
 
 ## 11. Generate deterministic civic events
 
@@ -274,7 +299,62 @@ data/example_county_board/intel_<model>/events/
 
 Use `--meeting <text>` to process a matching subset or `--output-dir` to place the derived event tree elsewhere. Event generation atomically replaces its own derived files but never changes records JSON or Markdown. An unattached motion request or seconder remains present with a review flag rather than being silently discarded.
 
-## 12. Inspect outputs
+
+## 12. Generate summaries
+
+The summary command orchestrates the complete Records-first workflow:
+
+```text
+source text
+→ create or reuse Records
+→ refresh deterministic Events
+→ consolidate only when the structured facts exceed the configured payload
+→ apply the selected final summary prompt
+→ write the canonical summary
+```
+
+Process an entity corpus:
+
+```bash
+yatsee intel summarize -e example_county_board
+```
+
+Process one full source filename inside the entity workspace:
+
+```bash
+yatsee intel summarize \
+  -e example_county_board \
+  -i data/example_county_board/normalized/example_meeting.txt
+```
+
+Standalone source files require an explicit prompt profile:
+
+```bash
+yatsee intel summarize -i ./document.txt -j <profile>
+```
+
+The command delegates extraction to the same implementation used by `yatsee intel records`. Existing Records are reused when their normalized-source hash matches; missing or changed Records are extracted. Events are then regenerated deterministically from the selected Records artifacts. The meeting type stored in those artifacts selects the configured `first / multi / final` summary route.
+
+Summary detail may vary with the selected profile and model. These artifacts are
+reader-oriented summaries, not official minutes. Publication systems may transform
+the canonical artifacts separately without changing YATSEE core output.
+
+Useful controls:
+
+```bash
+# Inspect summary prompt text without invoking the provider.
+yatsee intel summarize -e example_county_board --print-prompts
+
+# Persist intermediate consolidation chunks for debugging.
+yatsee intel summarize -e example_county_board --enable-chunk-writer
+
+# Override summary consolidation chunking and token budget.
+yatsee intel summarize -e example_county_board --chunk-style sentence --max-tokens 2500
+```
+
+The `--model` option selects both Records extraction and summary generation for the current implementation. `yatsee intel run` remains a compatibility alias. Run `yatsee intel records` directly when only structured extraction is wanted without Events or a final summary.
+
+## 13. Inspect outputs
 
 Typical layout:
 
@@ -284,11 +364,13 @@ data/example_county_board/
 ├── audio/
 ├── transcripts_medium/
 ├── normalized/
+├── audit/
+│   ├── transcript/<transcription-model>/
+│   └── records/<records-model>/
 └── intel_<model>/
     ├── summaries/
     ├── records/
-    ├── events/
-    └── audit/
+    └── events/
 ```
 
 Quick counts:
@@ -296,16 +378,17 @@ Quick counts:
 ```bash
 find data/example_county_board/transcripts_medium -name '*.vtt' | wc -l
 find data/example_county_board/normalized -name '*.txt' | wc -l
-find data/example_county_board/intel_* -name '*.summary.md' -o -name '*.summary.yaml'
+find data/example_county_board/intel_* \( -name '*.summary.md' -o -name '*.summary.yaml' \)
 find data/example_county_board/intel_*/records -name '*.records.json'
 find data/example_county_board/intel_*/records -name '*.records.md'
 find data/example_county_board/intel_*/events -name '*.events.json'
 find data/example_county_board/intel_*/events -name '*.events.md'
+find data/example_county_board/audit -name 'report.json' -o -name 'report.md' -o -name 'report.csv'
 ```
 
 ## Direct-path runs
 
-An entity is optional for transcript intelligence stages, but explicit input and output paths are then required:
+An entity is optional for intelligence stages. Standalone Records extraction still requires an explicit output directory:
 
 ```bash
 yatsee intel records \
@@ -315,7 +398,7 @@ yatsee intel records \
   -j civic
 ```
 
-The same principle applies to the summary stage using its input option name.
+Standalone summary orchestration derives a model-specific `intel_<model>` workspace beside the supplied file or directory, but requires an explicit `-j/--job-profile`.
 
 ## Recommended operating order
 
@@ -324,12 +407,13 @@ validate configuration
 → inspect source media
 → format audio
 → transcribe
-→ review VTT quality when needed
+→ audit VTT quality when needed
+→ reset and retranscribe selected failures when required
 → slice
 → normalize
 → inspect normalized text
-→ generate summaries and records independently
-→ generate deterministic events from complete records
+→ run summarize to ensure Records, refresh Events, and write summaries
+→ audit Records when a corpus-level review is useful
 → review derived artifacts against source evidence
 ```
 

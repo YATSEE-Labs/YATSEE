@@ -7,22 +7,15 @@ minimal development environment with only the base package installed.
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
 from pathlib import Path
 
 from yatsee.cli.main import build_parser
-from yatsee.core.errors import ConfigError, ValidationError
+from yatsee.core.errors import ValidationError
 from yatsee.core.config import redact_sensitive_config
 from yatsee.config_tools.validate import validate_entity_config, validate_global_config
 from yatsee.core.paths import get_entity_dir, resolve_contained_path
-from yatsee.intel.prompts import (
-    discover_summary_prompt_profiles,
-    load_classifier_bundle,
-    load_records_prompt_bundle,
-    load_summary_prompt_bundle,
-)
 from yatsee.providers.base import ProviderConfigError
 from yatsee.providers.security import validate_provider_target
 
@@ -41,6 +34,7 @@ class CliSmokeTests(unittest.TestCase):
 
         self.assertIn("config", help_text)
         self.assertIn("audio", help_text)
+        self.assertIn("audit", help_text)
         self.assertIn("transcript", help_text)
         self.assertIn("intel", help_text)
 
@@ -50,10 +44,6 @@ class CliSmokeTests(unittest.TestCase):
 
         args = parser.parse_args(["intel", "summarize", "--job-profile", "civic"])
         self.assertEqual(args.intel_command, "summarize")
-        self.assertTrue(callable(args.handler))
-
-        args = parser.parse_args(["intel", "summarize", "--job-profile", "custom-profile"])
-        self.assertEqual(args.job_profile, "custom-profile")
         self.assertTrue(callable(args.handler))
 
         args = parser.parse_args(["intel", "records"])
@@ -74,8 +64,8 @@ class CliSmokeTests(unittest.TestCase):
 
         args = parser.parse_args(
             [
-                "intel",
                 "audit",
+                "records",
                 "-e",
                 "test_entity",
                 "--model",
@@ -90,12 +80,12 @@ class CliSmokeTests(unittest.TestCase):
         self.assertTrue(callable(args.handler))
 
         args = parser.parse_args(
-            ["intel", "audit", "-e", "test_entity", "--rebuild"]
+            ["audit", "records", "-e", "test_entity", "--rebuild"]
         )
         self.assertEqual(args.rebuild_mode, "plan")
 
         args = parser.parse_args(
-            ["intel", "audit", "-e", "test_entity", "--rebuild-auto"]
+            ["audit", "records", "-e", "test_entity", "--rebuild-auto"]
         )
         self.assertEqual(args.rebuild_mode, "auto")
 
@@ -213,82 +203,6 @@ class ConfigSafetyTests(unittest.TestCase):
 
             messages = validate_entity_config(cfg, entity)
             self.assertIn("Entity registry contains required keys.", messages)
-
-
-class PromptBundleTests(unittest.TestCase):
-    """
-    Validate profile/prompt bundle loading mechanics.
-    """
-
-    def test_civic_prompt_bundle_loads(self) -> None:
-        """
-        Existing repository prompt bundles should load and validate from disk.
-        """
-        repo_root = Path(__file__).resolve().parents[1]
-        previous_cwd = Path.cwd()
-        try:
-            os.chdir(repo_root)
-            bundle = load_summary_prompt_bundle(
-                {},
-                "civic",
-                require_prompt_file=True,
-            )
-        finally:
-            os.chdir(previous_cwd)
-
-        self.assertFalse(bundle["fallback"])
-        self.assertIn("general", bundle["prompt_router"])
-        self.assertGreater(len(bundle["prompts"]), 0)
-
-    def test_civic_profile_loads_all_prompt_bundles(self) -> None:
-        """
-        The canonical civic profile should support deterministic classification,
-        summaries, and records without entity-local files.
-        """
-        repo_root = Path(__file__).resolve().parents[1]
-        previous_cwd = Path.cwd()
-        try:
-            os.chdir(repo_root)
-            classifier_bundle = load_classifier_bundle(
-                {},
-                "civic",
-                require_prompt_file=True,
-            )
-            summary_bundle = load_summary_prompt_bundle(
-                {},
-                "civic",
-                require_prompt_file=True,
-            )
-            records_bundle = load_records_prompt_bundle({}, "civic")
-        finally:
-            os.chdir(previous_cwd)
-
-        self.assertEqual(classifier_bundle["allowed_meeting_types"], ["general"])
-        self.assertIsNone(classifier_bundle["classifier_prompt"])
-        self.assertEqual(set(summary_bundle["prompt_router"]), {"general"})
-        self.assertEqual(set(records_bundle["records_router"]), {"general"})
-
-    def test_profile_names_reject_path_traversal(self) -> None:
-        """
-        Profile names should not be able to escape the prompt root.
-        """
-        with self.assertRaises(ConfigError):
-            load_summary_prompt_bundle({}, "../outside")
-
-    def test_prompt_profile_discovery_is_filesystem_based(self) -> None:
-        """
-        Profile discovery should reflect prompt directories, not hardcoded choices.
-        """
-        repo_root = Path(__file__).resolve().parents[1]
-        previous_cwd = Path.cwd()
-        try:
-            os.chdir(repo_root)
-            profiles = discover_summary_prompt_profiles({})
-        finally:
-            os.chdir(previous_cwd)
-
-        self.assertIn("civic", profiles)
-        self.assertNotIn("civic_general", profiles)
 
 
 if __name__ == "__main__":

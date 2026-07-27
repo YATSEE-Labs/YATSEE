@@ -3,7 +3,7 @@
 # townships, boards, commissions, authorities, districts, and committees.
 
 [prompt_router]
-general = { first = "general_civic_first_pass", multi = "general_civic_structure_preserving", final = "general_civic_final" }
+general = { first = "records_summary_consolidate", multi = "records_summary_consolidate", final = "records_summary_final" }
 
 [density_keywords]
 keywords = [
@@ -155,3 +155,77 @@ Requirements:
 - Omit empty sections and unsupported boilerplate.
 - Output only the final Markdown summary.
 '''
+[prompts.records_summary_consolidate]
+text = """
+You consolidate one ordered portion of structured factual material into compact working notes.
+
+Context: {context}
+
+Structured Facts:
+{text}
+
+Rules:
+- Use only the supplied material. Do not infer, discover, correct, or add facts.
+- Preserve every substantive subject and enough context to understand it.
+- Merge duplicate or overlapping facts only when they clearly describe the same subject, action, claim, or outcome.
+- Keep related facts, actions, outcomes, arguments, and follow-ups together.
+- Preserve exact names, amounts, dates, deadlines, identifiers, measurements, outcomes, vote methods, vote tallies, citations, and other material values when supplied.
+- Do not transfer an outcome, vote, attribution, measurement, or other detail between adjacent items.
+- If a relationship, value, outcome, or conclusion is absent, unclear, or conflicting, preserve that uncertainty rather than resolving it.
+- Omit incomplete or ambiguous quantitative fragments unless they are necessary to understand the subject.
+- Remove repeated evidence, processing metadata, internal traceability references, routine procedure, repeated wording, and low-value back-and-forth.
+- Preserve identifiers that are meaningful within the source domain; omit identifiers used only to connect or track internal processing artifacts.
+- Consolidate repeated descriptions of the same subject or action while retaining distinct stages, amendments, decisions, outcomes, and follow-ups.
+- For routine votes, preserve the supported outcome and tally without repeating individual responses unless a member-specific response materially affects interpretation.
+- When wording appears malformed or uncertain, preserve only the supported point and its uncertainty without guessing or reproducing unusable fragments.
+- Use compact factual bullets or short factual paragraphs. Do not add introductions, conclusions, stylistic framing, or polished narrative prose.
+- Keep source order when practical.
+- Produce materially less text than the input while retaining the information needed for a comprehensive final summary.
+- Output only Markdown working notes.
+"""
+
+[prompts.records_summary_final]
+text = """
+You produce a clear, comprehensive overview from structured facts that have already been extracted and consolidated.
+
+Context: {context}
+
+Consolidated Facts:
+{text}
+
+Purpose:
+Give a reader a clear understanding of all substantive material without recreating the source in full.
+
+Rules:
+- Use only the supplied facts. Do not infer, discover, correct, or add information.
+- Cover every substantive subject represented in the input, grouping closely related material and removing repetition.
+- Prefer concise topic-level synthesis over record-by-record chronology. A substantive subject should normally appear once.
+- State material actions, outcomes, conclusions, unresolved questions, follow-ups, and significant disagreements when supplied.
+- Preserve exact names, amounts, dates, deadlines, identifiers, measurements, quantitative details, citations, vote methods, vote tallies, outcomes, and other material values.
+- Keep each vote or outcome attached to the specific action or decision it resolves; do not merge details from neighboring items.
+- Keep each action attached to the subject it resolves. Do not repeat the same ordinance, resolution, policy, contract, appointment, motion, reading, amendment, or vote in multiple sections.
+- Merge policy terms, proposed amendments, oversight concerns, supporting arguments, opposing arguments, procedural status, and outcome into one topic when they concern the same underlying item.
+- State procedural status precisely when supported, such as first reading, advanced to second reading, approved, rejected, deferred, withdrawn, failed for lack of a second, or discussed without final action. Do not substitute vague language such as "moved forward" when a more precise supported status is available.
+- If a relationship, value, vote detail, outcome, or conclusion is absent, unclear, or conflicting, omit the uncertain component or state the uncertainty rather than infer it.
+- Omit incomplete or ambiguous quantitative fragments rather than presenting them as precise facts.
+- Prefer a compact vote tally and outcome, such as "passed 6-1," over listing individual votes.
+- Include individual votes only when a named dissent, abstention, recusal, conflict, or other member-specific vote is substantively important.
+- Never print a named voter list unless it exactly reconciles with the stated tally. If the tally and voter list conflict or the list is incomplete, preserve the supported tally and outcome and omit the names.
+- Omit motion makers and seconders unless their identity materially affects the substance, dispute, accountability, or outcome.
+- Treat routine approvals as compact context rather than separate narrative events. Combine agenda approval, minutes, routine reports, claims, payroll, appointments, and adjournment when no substantive dispute or unusual outcome makes them independently important.
+- Explain significant concerns, alternatives, viewpoints, and follow-up work without reproducing every exchange.
+- Attribute public comments, disputed calculations, allegations, predictions, and personal interpretations to the speaker or source. Do not present them as established facts.
+- Preserve a speaker's material concern or request, but omit repetitive rhetoric, unsupported arithmetic, and incidental personal detail unless essential to understanding the issue.
+- Do not promote a numerical claim to an authoritative fact merely because the arithmetic appears plausible. Preserve the stated source and qualifier.
+- Treat malformed, uncertain, or transcript-corrupted names, identifiers, amounts, and phrases conservatively. Preserve them only when material and sufficiently supported; otherwise omit them or describe the uncertainty without repairing or guessing.
+- Compress routine procedure, repeated statements, and incidental conversational detail.
+- Treat reader-irrelevant traceability references and processing labels as metadata rather than facts, even when they appear in the supplied notes.
+- Preserve identifiers that identify source-domain subjects, actions, documents, authorities, or citations.
+- Use ordinary Markdown for currency and measurements; do not introduce mathematical notation unless it is necessary to preserve source meaning.
+- Preserve explicitly flagged conflicts instead of resolving them by guessing.
+- Do not present the summary as an official or definitive source record.
+- Use clear Markdown headings based on the supplied content. Omit empty sections.
+- Keep the tone neutral, direct, and readable.
+- Before output, remove reader-irrelevant processing metadata and obvious duplicate treatments while preserving substantive distinctions.
+- Output only the final Markdown summary. Do not add process notes or commentary.
+"""

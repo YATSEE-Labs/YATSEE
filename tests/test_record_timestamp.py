@@ -287,7 +287,7 @@ def test_alignment_fingerprint_reuses_current_enrichment(tmp_path: Path) -> None
         config=config,
     )
 
-def test_placeholder_video_id_is_not_published_as_source_video(
+def test_placeholder_video_id_is_not_retained_as_source_video(
     tmp_path: Path,
 ) -> None:
     """

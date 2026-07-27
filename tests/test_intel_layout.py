@@ -11,8 +11,8 @@ import pytest
 
 from yatsee.core.errors import ValidationError
 from yatsee.intel.layout import resolve_intel_layout
+from yatsee.audit.resolve import resolve_records_audit_paths
 from yatsee.intel.resolve import (
-    resolve_audit_paths,
     resolve_event_paths,
     resolve_record_paths,
     resolve_summary_paths,
@@ -92,16 +92,13 @@ def test_resolve_intel_layout_uses_one_model_workspace(tmp_path: Path) -> None:
     assert Path(layout["events_dir"]) == (
         entity_dir / "intel_gemma4_e4b" / "events"
     )
-    assert Path(layout["audit_dir"]) == (
-        entity_dir / "intel_gemma4_e4b" / "audit"
-    )
 
 
 def test_entity_stage_resolvers_use_shared_model_workspace(
     tmp_path: Path,
 ) -> None:
     """
-    Resolve all entity intelligence stages beneath one model workspace.
+    Resolve intelligence stages together while audit reports remain entity-level.
     """
     config_path = _write_project(tmp_path)
     previous_cwd = Path.cwd()
@@ -109,16 +106,20 @@ def test_entity_stage_resolvers_use_shared_model_workspace(
         os.chdir(tmp_path)
         summary = resolve_summary_paths(str(config_path), entity="test_entity")
         records = resolve_record_paths(str(config_path), entity="test_entity")
-        audit = resolve_audit_paths(str(config_path), entity="test_entity")
+        audit = resolve_records_audit_paths(str(config_path), entity="test_entity")
         events = resolve_event_paths(str(config_path), entity="test_entity")
     finally:
         os.chdir(previous_cwd)
 
     workspace = tmp_path / "data" / "test_entity" / "intel_gemma4_e4b"
+    assert Path(summary["records_dir"]) == workspace / "records"
+    assert Path(summary["events_dir"]) == workspace / "events"
     assert Path(summary["output_dir"]) == workspace / "summaries"
     assert Path(records["output_dir"]) == workspace / "records"
     assert Path(audit["records_dir"]) == workspace / "records"
-    assert Path(audit["output_dir"]) == workspace / "audit"
+    assert Path(audit["output_dir"]) == (
+        tmp_path / "data" / "test_entity" / "audit" / "records" / "gemma4_e4b"
+    )
     assert Path(events["records_dir"]) == workspace / "records"
     assert Path(events["output_dir"]) == workspace / "events"
 
@@ -132,6 +133,36 @@ def test_intel_workspace_override_cannot_escape_entity_root(tmp_path: Path) -> N
     try:
         os.chdir(tmp_path)
         with pytest.raises(ValidationError):
-            resolve_audit_paths(str(config_path), entity="test_entity")
+            resolve_records_audit_paths(str(config_path), entity="test_entity")
     finally:
         os.chdir(previous_cwd)
+
+
+def test_summary_resolution_supports_standalone_input(tmp_path: Path) -> None:
+    """
+    Place standalone Records, Events, and summaries beside the source workspace.
+
+    :param tmp_path: Pytest temporary directory
+    :return: None
+    """
+    config_path = _write_project(tmp_path)
+    source_path = tmp_path / "external" / "document.txt"
+    source_path.parent.mkdir()
+    source_path.write_text("Research notes.", encoding="utf-8")
+
+    previous_cwd = Path.cwd()
+    try:
+        os.chdir(tmp_path)
+        resolved = resolve_summary_paths(
+            str(config_path),
+            entity=None,
+            input_path=str(source_path),
+        )
+    finally:
+        os.chdir(previous_cwd)
+
+    workspace = source_path.parent / "intel_gemma4_e4b"
+    assert Path(resolved["records_dir"]) == workspace / "records"
+    assert Path(resolved["events_dir"]) == workspace / "events"
+    assert Path(resolved["output_dir"]) == workspace / "summaries"
+    assert resolved["file_list"] == [str(source_path)]

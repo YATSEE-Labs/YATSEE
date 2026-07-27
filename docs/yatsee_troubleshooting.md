@@ -9,6 +9,8 @@ yatsee --help
 python -m yatsee --help
 python -m compileall src/yatsee
 
+yatsee audit --help
+
 yatsee config validate
 yatsee config resolve -e <entity>
 
@@ -93,19 +95,53 @@ Use `--input-path` and `--output-dir` for nonstandard layouts.
 
 ### Transcript quality is poor
 
-Run QA before changing prompts:
+Run the integrated transcript audit before changing prompts:
 
 ```bash
-python scripts/qa_transcript_report.py --details
-python scripts/qa_transcript_report.py --json qa_report.json
+yatsee audit transcript \
+  -e <entity> \
+  --model medium
 ```
 
-ASR loops should be rebuilt, not edited into plausible text. Preview reset actions before applying them:
+Reports are written to:
+
+```text
+data/<entity>/audit/transcript/<model>/report.json
+data/<entity>/audit/transcript/<model>/report.md
+```
+
+ASR loops should be rebuilt, not edited into plausible text. Preview the reset
+selected from the canonical report before applying it:
 
 ```bash
-python scripts/qa_reset_vtt_for_rebuild.py \
-  --entity <entity> \
-  --qa-report qa_report.json
+yatsee audit transcript reset \
+  -e <entity> \
+  --model medium
+```
+
+After confirming the matched VTT and tracker entries, rerun with `--apply` and
+then transcribe the selected source again. Timing review candidates are reported
+for inspection but do not independently cause `block` or `rerun` status.
+
+To review cues that transcription suppressed, first create a CSV:
+
+```bash
+yatsee audit transcript restore \
+  -e <entity> \
+  --model medium \
+  --log-file transcribe.log \
+  --write-review-csv suppressed-review.csv
+```
+
+Mark only verified rows as `action=restore`, preview the insertion, and add
+`--apply` only after reviewing the matched VTT:
+
+```bash
+yatsee audit transcript restore \
+  -e <entity> \
+  --model medium \
+  --log-file transcribe.log \
+  --review-csv suppressed-review.csv
 ```
 
 Also review audio quality, language, model choice, people aliases, local entities, and proven replacement rules.
@@ -142,19 +178,19 @@ Prefer `llm_api_key_env` or `YATSEE_LLM_API_KEY`. Confirm the provider, key, mod
 
 ### Summary command is slow
 
-Check model size, provider logs, chunk size, context size, device use, and whether additional reduction passes are being triggered.
+Check model size, provider logs, structured-input chunk size, context size, device use, Records/Event density, and whether additional reduction passes are being triggered.
 
 ### Summary quality is weak
 
 Review in this order:
 
-1. source audio;
-2. VTT transcript;
-3. sliced TXT;
-4. normalized TXT;
-5. entity names and replacements;
-6. meeting classification;
-7. selected prompt route;
+1. source audio and VTT transcript;
+2. normalized TXT;
+3. final Records JSON;
+4. deterministic Events JSON;
+5. the meeting type preserved in Events;
+6. the selected summary prompt route;
+7. intermediate summary chunks when enabled;
 8. model behavior.
 
 Inspect prompts and chunk output:
@@ -173,8 +209,6 @@ The selected profile does not support records. Use `civic`, add a valid sidecar,
 ```bash
 yatsee intel records -e <entity> -j civic --print-prompts
 ```
-
-The built-in `research` profile currently has no records sidecar.
 
 ### Records output is reused
 
@@ -256,6 +290,31 @@ Check the selected route, chunk output, transcript quality, and whether the segm
 ### Partial records run does not resume
 
 Current records runs are transcript-level, not chunk-resumable. Existing artifacts are reused when the normalized transcript hash matches, regardless of status or extraction provenance. A changed normalized transcript or missing artifact triggers a full transcript extraction. Partial attempts are written separately and do not replace a previous final artifact.
+
+### Audit the Records corpus
+
+Run the deterministic Records audit without invoking an LLM:
+
+```bash
+yatsee audit records \
+  -e <entity> \
+  --model gemma4:e4b \
+  --profile balanced
+```
+
+Reports are written to:
+
+```text
+data/<entity>/audit/records/<model>/report.csv
+data/<entity>/audit/records/<model>/report.json
+data/<entity>/audit/records/<model>/report.md
+```
+
+Use `--profile strict` for a more sensitive review. The default audit and
+`--rebuild` are deterministic and do not invoke an LLM. `--rebuild-auto` is the
+explicit exception: it invokes Records generation for structurally justified
+candidates and then reruns the audit. Audit findings are review signals, not proof
+that the source or generated artifact is wrong.
 
 ## Pricing output is missing
 

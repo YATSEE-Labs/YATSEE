@@ -13,8 +13,9 @@ local media
   → audio normalization
   → transcription
   → transcript slicing and normalization
-  → summaries / records
+  → structured records
   → deterministic events
+  → reader-oriented summaries
   → optional indexing, search, or publication
 ```
 
@@ -36,11 +37,23 @@ YATSEE is built to make public proceedings meaningfully accessible, with or with
 
 | Command | Output | Processing model |
 |---|---|---|
-| `yatsee intel summarize` | Readable Markdown or YAML summary | LLM extraction, optional reductions, final synthesis |
 | `yatsee intel records` | Structured JSON records and an itemized Markdown view, with optional evidence timestamps | LLM extraction per chunk, deterministic consolidation, optional segment alignment, and rendering |
 | `yatsee intel events` | Provenance-preserving civic events, meeting Markdown, and entity JSON indexes | Deterministic adjacent-duplicate consolidation and local motion/second/vote grouping |
+| `yatsee intel summarize` | Readable Markdown or YAML summary | Ensures Records, refreshes deterministic Events, then performs bounded LLM synthesis |
 
-Records and summaries are derived review artifacts, not official minutes. Records preserve transcript evidence and avoid an LLM consolidation pass, but the extracted facts still require source review when accuracy matters.
+Records, Events, and summaries are derived review artifacts, not official minutes. Records preserve transcript evidence, Events organize those facts deterministically, and summaries synthesize the paired artifacts for readers. Source review remains necessary when accuracy matters.
+
+## Artifact audits
+
+| Command | Scope | Output |
+|---|---|---|
+| `yatsee audit transcript` | VTT ASR loops, timing-density candidates, timestamp order, and file status | JSON and Markdown reports under `data/<entity>/audit/transcript/<model>/` |
+| `yatsee audit records` | Deterministic structural review of an existing Records corpus | CSV, JSON, and Markdown reports under `data/<entity>/audit/records/<model>/` |
+
+Transcript remediation remains explicit. `yatsee audit transcript reset` is a
+dry-run unless `--apply` is supplied, and `yatsee audit transcript restore`
+requires reviewed CSV rows marked `action=restore`. Records auditing does not
+invoke an LLM unless the operator explicitly selects `--rebuild-auto`.
 
 ## Installation
 
@@ -106,15 +119,18 @@ Run the pipeline:
 ```bash
 yatsee audio format -e example_county_board
 yatsee audio transcribe -e example_county_board --faster
+yatsee audit transcript -e example_county_board --model medium
 yatsee transcript slice -e example_county_board --force
 yatsee transcript normalize -e example_county_board --force
 
 yatsee intel summarize -e example_county_board
-yatsee intel records -e example_county_board -j civic
-yatsee intel events -e example_county_board
 ```
 
 Events are generated entirely from complete records artifacts. The workflow does not invoke an LLM, modify source records, or require transcript embeddings. It writes model-specific meeting event artifacts plus aggregate `events.jsonl` and `meetings.json` indexes suitable for publication and downstream search.
+
+`yatsee intel summarize` is the end-to-end intelligence entry point. It invokes the canonical Records stage, reuses Records when the normalized source hash still matches, refreshes deterministic Events, and then applies the configured `first / multi / final` summary route. Pass a full source file with `-i`, or omit `-i` to process the entity's normalized corpus.
+
+Extraction remains independently usable through `yatsee intel records`, and deterministic organization remains independently usable through `yatsee intel events`.
 
 Records artifacts are reused whenever the normalized transcript hash is unchanged. Prompt, classifier, model, profile, schema/version, status, and chunk metadata are provenance only; use `--force` when you intentionally want those changes to regenerate records. The deterministic Markdown view is regenerated from cached JSON without invoking the model again.
 
@@ -135,6 +151,7 @@ Use `yatsee intel run` only for compatibility; it is an alias for `yatsee intel 
 yatsee config ...
 yatsee audio ...
 yatsee transcript ...
+yatsee audit ...
 yatsee intel ...
 ```
 
@@ -143,6 +160,7 @@ Useful inspection commands:
 ```bash
 yatsee --help
 yatsee config resolve -e <entity>
+yatsee audit --help
 yatsee intel prompts validate -j civic
 yatsee intel summarize -e <entity> --print-prompts
 yatsee intel records -e <entity> -j civic --print-prompts
@@ -159,16 +177,13 @@ prompts/civic/
 └── records_prompt.toml
 ```
 
-- `classifier.toml` identifies the formal meeting type.
-- `prompts.toml` routes summary `first`, `multi`, and `final` prompts.
+- `classifier.toml` identifies the formal meeting type during Records extraction.
+- `prompts.toml` routes summary `first`, `multi`, and `final` prompts from the meeting type preserved in Events.
 - `records_prompt.toml` routes each meeting type to one extraction prompt.
 
 Entity-local files under `data/<entity>/prompts/<profile>/` override project defaults.
 
-The built-in `civic` profile is the portable, single-route starting point for
-new entities and supports deterministic classification, summaries, and records.
-The research profile currently supports summaries but does not include a records
-sidecar.
+The built-in `civic` profile is the portable starting point for new entities and supports Records extraction, deterministic Events, and Records-based summaries. Profiles without a Records extraction contract cannot produce the upstream artifacts required by the production summary stage.
 
 ## Provider trust boundary
 
@@ -197,9 +212,13 @@ Operator documentation:
 - [Troubleshooting](./docs/yatsee_troubleshooting.md)
 - [Transcription defaults](./docs/transcription-defaults.md)
 
-## Optional QA and downstream tools
+## Audit and downstream tools
 
-Transcript QA helpers live under `scripts/`. Index and search prototypes live under `examples/`. These tools consume pipeline artifacts but are not required for the core media-to-artifact workflow.
+Transcript and Records QA are available through the top-level `yatsee audit`
+command family. Reviewed transcript reset and suppressed-cue restoration are
+subcommands of `yatsee audit transcript`. Index and search prototypes remain
+under `examples/`; they consume pipeline artifacts but are not required for the
+core media-to-artifact workflow.
 
 ## License
 

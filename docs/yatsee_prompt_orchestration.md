@@ -1,6 +1,6 @@
 # YATSEE Prompt Orchestration
 
-YATSEE separates shared meeting classification from artifact-specific prompt routing.
+YATSEE separates Records classification and extraction from downstream Records/Events summary routing.
 
 ## Profile layout
 
@@ -13,8 +13,8 @@ prompts/<profile>/
 
 | File | Used by | Contract |
 |---|---|---|
-| `classifier.toml` | Summary and records | Allowed labels plus a classifier prompt when multiple labels exist |
-| `prompts.toml` | Summary | Meeting type to `first`, `multi`, and `final` prompt IDs |
+| `classifier.toml` | Records | Allowed labels plus a classifier prompt when multiple labels exist |
+| `prompts.toml` | Summary | Events meeting type to `first`, `multi`, and `final` prompt IDs |
 | `records_prompt.toml` | Records | Meeting type to one extraction prompt ID |
 
 ## Resolution order
@@ -62,12 +62,14 @@ allowed = ["general"]
 
 YATSEE selects that sole type without calling the model or charging classifier token usage. Profiles with multiple allowed types must provide a classifier prompt containing both `{context}` and `{text}`.
 
-Multi-label classification uses filename-derived context plus an initial transcript snippet. Disable or override it when the meeting type is already known:
+Multi-label classification uses filename-derived context plus an initial transcript snippet during Records extraction. Disable or override it when the meeting type is already known:
 
 ```bash
-yatsee intel summarize -e <entity> --disable-auto-classification
 yatsee intel records -e <entity> --meeting-type finance_committee
+yatsee intel records -e <entity> --disable-auto-classification
 ```
+
+Events preserve the resulting meeting type. Summary generation reuses that deterministic artifact metadata and does not invoke the classifier.
 
 ## Summary routing
 
@@ -76,15 +78,15 @@ yatsee intel records -e <entity> --meeting-type finance_committee
 ```toml
 [prompt_router]
 city_council = {
-  first = "city_council_first_pass",
-  multi = "structure_preserving",
-  final = "civic_scan",
+  first = "records_summary_consolidate",
+  multi = "records_summary_consolidate",
+  final = "records_summary_final",
 }
 
 general = {
-  first = "general_first_pass",
-  multi = "structure_preserving",
-  final = "final_pass_detailed",
+  first = "records_summary_consolidate",
+  multi = "records_summary_consolidate",
+  final = "records_summary_final",
 }
 ```
 
@@ -93,15 +95,19 @@ Prompt text lives under `[prompts.<prompt_id>]`.
 Summary flow:
 
 ```text
-classify
-→ first-pass extraction over transcript chunks
-→ multi-pass reduction only while intermediate text remains too large
+run or reuse the selected profile's Records extraction
+→ refresh deterministic Events from those Records
+→ route from the meeting type preserved in the artifacts
+→ serialize compact structured facts
+→ run first and multi consolidation only while material remains too large
 → final LLM synthesis
 ```
 
-`--max-pass` caps the summary workflow. `--first-prompt`, `--second-prompt`, and `--final-prompt` override route selections for one run.
+The `first`, `multi`, and `final` roles remain compatible with the existing prompt router. Entity profiles may route several classifier labels to one shared prompt pair or specialize individual routes when the meeting bodies require materially different treatment.
 
-Optional `[density_keywords]` configuration is shared by summary pass one and records. Both workflows use it when `--chunk-style density` is selected.
+`--max-pass` caps summary consolidation. `--first-prompt`, `--second-prompt`, and `--final-prompt` override route selections for one run. `-i/--txt-input` selects a full source file or directory and is passed through the same Records workflow used by the standalone Records command.
+
+Optional `[density_keywords]` configuration remains available when `--chunk-style density` is selected. Sentence chunking is the production summary default because the structured source is already organized by Events.
 
 ## Records routing
 
@@ -216,11 +222,15 @@ yatsee intel summarize -e <entity> --enable-chunk-writer
 
 Inspect records artifacts under the transcript-specific `raw/`, `chunks/`, and `errors/` directories.
 
-## Built-in profile status
+## Current portable profile
 
-| Profile | Classifier | Summary | Records |
-|---|---:|---:|---:|
-| `civic` | Deterministic `general` | Yes | Yes |
-| `research` | Multi-label | Yes | No sidecar yet |
+The shipped general-purpose profile is `civic`. It provides a deterministic
+`general` classifier route, Records extraction, and Records/Events summary
+routing. Entity-local `civic` bundles may replace any of those files with
+specialized meeting-type routes. There is no separate `civic_general` runtime
+profile.
 
-A missing records sidecar fails clearly rather than silently falling back to summary prompts.
+A missing Records sidecar fails clearly rather than silently falling back to
+summary prompts. The summary command does not create profile contracts; it
+orchestrates the classifier, Records, and summary files already supplied by the
+selected profile.

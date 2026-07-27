@@ -8,11 +8,14 @@ YATSEE is a staged, local-first media processing pipeline. Each stage produces e
 compatible local media
   → normalized audio
   → VTT transcript
+  → optional transcript audit and reviewed remediation
   → sliced TXT and optional segment JSONL
   → normalized transcript
-  ├── summary
-  ├── structured records
-  └── optional embeddings, indexing, search, or publication
+  → structured records
+  → optional deterministic Records audit
+  → deterministic events
+  → reader-oriented summary
+  → optional indexing, search, site generation, or publication
 ```
 
 Source acquisition is handled outside YATSEE core. Compatible local media can come from `yatsee-fetch`, a recorder, an upload workflow, an archive, or a manual copy.
@@ -24,13 +27,15 @@ Source acquisition is handled outside YATSEE core. Compatible local media can co
 | Configure | `yatsee config ...` | Global and entity TOML | Resolved runtime configuration |
 | Format | `yatsee audio format` | Audio or video media | Mono 16 kHz WAV or FLAC |
 | Transcribe | `yatsee audio transcribe` | Normalized audio | VTT transcript |
+| Audit transcript | `yatsee audit transcript` | VTT transcript | JSON and Markdown QA reports |
 | Slice | `yatsee transcript slice` | VTT | TXT and optional segment JSONL |
 | Normalize | `yatsee transcript normalize` | Transcript TXT | Clean normalized TXT |
-| Summarize | `yatsee intel summarize` | Normalized TXT | Markdown or YAML summary |
 | Records | `yatsee intel records` | Normalized TXT, optional segment JSONL | Structured JSON records, optional timestamps, and deterministic Markdown view |
+| Audit Records | `yatsee audit records` | Existing Records corpus | CSV, JSON, and Markdown QA reports |
 | Events | `yatsee intel events` | Complete records JSON | Provenance-preserving meeting events, Markdown, and entity JSON indexes |
+| Summarize | `yatsee intel summarize` | Normalized TXT or explicit source TXT | Records, Events, and Markdown or YAML summary |
 
-Each processing command can accept an entity or explicit input and output paths. Entity-backed runs use the configured entity data directory.
+Entity-backed runs use the configured entity data directory. Direct-path support varies by command; use each command's `--help` output for the required input and output arguments.
 
 ## Entity artifact layout
 
@@ -43,11 +48,13 @@ data/<entity>/
 ├── audio/
 ├── transcripts_<model>/
 ├── normalized/
+├── audit/
+│   ├── transcript/<transcription-model>/
+│   └── records/<records-model>/
 ├── intel_<model>/
 │   ├── summaries/
 │   ├── records/
-│   ├── events/
-│   └── audit/
+│   └── events/
 └── yatsee_db/              # optional indexing/search data
 ```
 
@@ -58,14 +65,15 @@ Each `intel_<model>` workspace preserves one complete model lineage. An optional
 ### Summaries
 
 ```text
-classify meeting
-  → select first / multi / final prompt route
-  → extract chunk summaries
-  → reduce again only when needed
+run the canonical Records stage and reuse matching artifacts
+  → refresh deterministic Events from the resulting Records
+  → use the preserved meeting type for first / multi / final prompt routing
+  → serialize compact reader-oriented structured facts
+  → consolidate only when the facts exceed the configured payload
   → final LLM synthesis
 ```
 
-Summary output is designed for readability. It may combine related facts and reorganize content according to the selected profile.
+The summary command does not implement its own extraction path. It delegates normalized source handling and classification to the canonical Records stage, then consumes the resulting Records and deterministic Events. Records remain the factual source layer, Events provide organization, and the summary profile controls consolidation and final presentation.
 
 ### Records
 
@@ -127,8 +135,8 @@ prompts/<profile>/
 
 | File | Responsibility |
 |---|---|
-| `classifier.toml` | Allowed meeting types and classifier prompt |
-| `prompts.toml` | Summary prompts, routes, and optional density keywords |
+| `classifier.toml` | Allowed meeting types and classifier prompt used during Records extraction |
+| `prompts.toml` | Records/Events summary prompts, routes, and optional density keywords |
 | `records_prompt.toml` | Records extraction prompts and meeting-type routes |
 
 Entity-local profile files under `data/<entity>/prompts/<profile>/` take precedence over project files.
@@ -152,13 +160,15 @@ yatsee config resolve -e <entity>
 
 yatsee audio format -e <entity>
 yatsee audio transcribe -e <entity> --faster
+yatsee audit transcript -e <entity> --model medium
 yatsee transcript slice -e <entity> --force
 yatsee transcript normalize -e <entity> --force
 
 yatsee intel summarize -e <entity>
-yatsee intel records -e <entity> -j civic
-yatsee intel events -e <entity>
+yatsee audit records -e <entity> --model gemma4:e4b --profile balanced
 ```
+
+The standalone `yatsee intel records` and `yatsee intel events` commands remain available when only those artifacts are needed. Running both before `yatsee intel summarize` is not required because Summary already ensures Records and refreshes Events.
 
 ## Trust boundaries
 
@@ -166,6 +176,7 @@ yatsee intel events -e <entity>
 - Transcript and model output are untrusted generated content.
 - Provider URLs and CLI executables are explicit trust decisions.
 - Summary and record artifacts should be checked against source evidence before official or high-stakes use.
+- Audit findings are review signals, not proof that an artifact or source is wrong.
 - Deterministic mechanics should remain separate from probabilistic extraction and synthesis.
 
 ## Scope boundaries
@@ -174,6 +185,6 @@ YATSEE core owns media-to-artifact processing. The following remain adjacent unl
 
 - media acquisition and provider-specific fetching
 - hosted accounts, billing, and upload UX
-- publication and public archive workflows
+- hosted site deployment and public archive delivery
 - production search interfaces
 - downstream investigative analysis

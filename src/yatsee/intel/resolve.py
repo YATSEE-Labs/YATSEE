@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from typing import Any, Dict
 
 from yatsee.core.config import load_entity_config, load_global_config
@@ -183,22 +184,22 @@ def resolve_summary_paths(
     max_tokens: int | None = None,
 ) -> Dict[str, Any]:
     """
-    Resolve configuration, model selection, and paths for summary execution.
+    Resolve the complete Records-to-summary workflow paths.
 
-    This function owns summary-stage policy such as the configured summarization
-    model, model-specific output directory, transcript discovery, and source
-    chunk token budget. It is intentionally separate from generic filesystem I/O
-    and from CLI argument parsing.
+    Entity-backed runs use the entity's normalized input directory and shared
+    model lineage. Direct-input runs create the same ``intel_<model>`` layout
+    beside the supplied file or inside the supplied directory, allowing a
+    standalone document to use Records, Events, and summaries without an entity.
 
     :param global_config_path: Path to the global ``yatsee.toml`` file
     :param entity: Optional entity handle
-    :param input_path: Optional normalized transcript file or directory
-    :param output_dir: Optional summary output directory override
-    :param model: Optional summarization model override
-    :param max_words: Optional approximate word threshold for source chunks
-    :param max_tokens: Optional approximate token threshold for source chunks
-    :return: Dictionary of resolved summary-stage settings
-    :raises ValidationError: If required configuration or runtime inputs are invalid
+    :param input_path: Optional source text file or directory
+    :param output_dir: Optional final summary output directory override
+    :param model: Optional Records/summary model override
+    :param max_words: Optional approximate word threshold for summary chunks
+    :param max_tokens: Optional approximate token threshold for summary chunks
+    :return: Resolved workflow configuration, inputs, and artifact directories
+    :raises ValidationError: If configuration, inputs, or token settings are invalid
     """
     global_cfg = load_global_config(global_config_path)
     entity_cfg = load_entity_config(global_cfg, entity) if entity else {}
@@ -206,46 +207,50 @@ def resolve_summary_paths(
     if not entity and not input_path:
         raise ValidationError("Without --entity, --txt-input must be defined")
     if entity and not entity_cfg.get("data_path"):
-        raise ValidationError("No entity data_path configured")
+        raise ValidationError(f"Entity '{entity}' does not define data_path")
 
-    resolved_model = (
-        model
-        or entity_cfg.get("summarization_model")
-        or global_cfg.get("system", {}).get("default_summarization_model")
+    resolved_model, model_key, model_cfg = resolve_records_model(
+        global_cfg,
+        entity_cfg,
+        model,
     )
-    if not resolved_model:
-        raise ValidationError("No summarization model specified")
 
-    model_key, model_cfg = _resolve_model_profile(global_cfg, resolved_model)
+    if entity:
+        workspace_root = str(entity_cfg["data_path"])
+    else:
+        source_path = Path(str(input_path)).expanduser().resolve()
+        workspace_root = str(source_path if source_path.is_dir() else source_path.parent)
 
-    if not entity and not output_dir:
-        raise ValidationError("Without --entity, --output-dir must be defined")
-
-    intel_layout = (
-        resolve_intel_layout(entity_cfg["data_path"], model_key, model_cfg)
-        if entity
-        else None
-    )
-    paths = resolve_transcript_stage_paths(
+    intel_layout = resolve_intel_layout(workspace_root, model_key, model_cfg)
+    transcript_paths = resolve_transcript_stage_paths(
         entity=entity,
         entity_cfg=entity_cfg,
         input_path=input_path,
-        output_dir=output_dir,
-        default_output_dir=(
-            intel_layout["summaries_dir"] if intel_layout else None
-        ),
+        output_dir=intel_layout["records_dir"],
+        default_output_dir=intel_layout["records_dir"],
     )
-    if not paths["file_list"]:
+    if not transcript_paths["file_list"]:
         raise ValidationError(
-            f"No transcript files found in: {paths['input_path']}"
+            f"No transcript files found in: {transcript_paths['input_path']}"
         )
 
-    if max_words and not max_tokens:
+    resolved_output_dir = os.path.abspath(
+        output_dir or intel_layout["summaries_dir"]
+    )
+    ensure_directory(intel_layout["records_dir"])
+    ensure_directory(intel_layout["events_dir"])
+    ensure_directory(resolved_output_dir)
+
+    if max_tokens is not None:
+        resolved_max_tokens = max_tokens
+    elif max_words is not None:
         resolved_max_tokens = int(max_words / 0.75)
     else:
-        resolved_max_tokens = max_tokens or model_cfg.get("max_tokens", 2500)
+        resolved_max_tokens = int(model_cfg.get("max_tokens", 2500))
 
-    num_ctx = model_cfg.get("num_ctx", 8192)
+    num_ctx = int(model_cfg.get("num_ctx", 8192))
+    if resolved_max_tokens <= 0:
+        raise ValidationError("Summary chunk size must be positive")
     if resolved_max_tokens >= num_ctx:
         raise ValidationError(
             f"Chunk size ({resolved_max_tokens}) exceeds or collides with "
@@ -258,14 +263,15 @@ def resolve_summary_paths(
         "model": resolved_model,
         "model_key": model_key,
         "model_cfg": model_cfg,
-        "input_dir": paths["input_path"],
-        "file_list": paths["file_list"],
-        "output_dir": paths["output_dir"],
-        "intel_dir": intel_layout["intel_dir"] if intel_layout else None,
-        "max_tokens": resolved_max_tokens,
+        "input_dir": transcript_paths["input_path"],
+        "file_list": transcript_paths["file_list"],
+        "intel_dir": intel_layout["intel_dir"],
+        "records_dir": intel_layout["records_dir"],
+        "events_dir": intel_layout["events_dir"],
+        "output_dir": resolved_output_dir,
+        "max_tokens": int(resolved_max_tokens),
         "num_ctx": num_ctx,
     }
-
 
 def resolve_record_paths(
     global_config_path: str,
@@ -360,56 +366,6 @@ def resolve_record_paths(
         "num_ctx": num_ctx,
     }
 
-
-def resolve_audit_paths(
-    global_config_path: str,
-    *,
-    entity: str,
-    model: str | None = None,
-    output_dir: str | None = None,
-) -> Dict[str, Any]:
-    """
-    Resolve an entity's model-specific records root and audit output directory.
-
-    Audit intentionally does not discover normalized transcripts or create the
-    records root. It inspects existing artifacts and writes reports beneath a
-    sibling ``audit`` directory beneath the shared model workspace unless the
-    operator supplies an explicit output.
-
-    :param global_config_path: Path to global yatsee.toml
-    :param entity: Entity handle
-    :param model: Optional configured records model override
-    :param output_dir: Optional audit report directory override
-    :return: Resolved configuration and audit paths
-    :raises ValidationError: If entity or records configuration is invalid
-    """
-    global_cfg = load_global_config(global_config_path)
-    entity_cfg = load_entity_config(global_cfg, entity)
-    data_path = entity_cfg.get("data_path")
-    if not data_path:
-        raise ValidationError(f"Entity '{entity}' does not define data_path")
-
-    resolved_model, model_key, model_cfg = resolve_records_model(
-        global_cfg,
-        entity_cfg,
-        model,
-    )
-    intel_layout = resolve_intel_layout(data_path, model_key, model_cfg)
-    records_dir = intel_layout["records_dir"]
-    resolved_output_dir = os.path.abspath(
-        output_dir or intel_layout["audit_dir"]
-    )
-
-    return {
-        "global_cfg": global_cfg,
-        "entity_cfg": entity_cfg,
-        "model": resolved_model,
-        "model_key": model_key,
-        "model_cfg": model_cfg,
-        "intel_dir": intel_layout["intel_dir"],
-        "records_dir": records_dir,
-        "output_dir": resolved_output_dir,
-    }
 
 
 def resolve_event_paths(

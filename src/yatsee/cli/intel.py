@@ -27,7 +27,7 @@ def register_intel_commands(subparsers: argparse._SubParsersAction) -> None:
     summarize_parser = intel_subparsers.add_parser(
         "summarize",
         aliases=["run"],
-        help="Generate multi-pass transcript summaries",
+        help="Generate summaries through Records and Events",
     )
     _add_summarize_arguments(summarize_parser)
     summarize_parser.set_defaults(handler=handle_intel_run)
@@ -46,13 +46,6 @@ def register_intel_commands(subparsers: argparse._SubParsersAction) -> None:
     _add_events_arguments(events_parser)
     events_parser.set_defaults(handler=handle_intel_events)
 
-    audit_parser = intel_subparsers.add_parser(
-        "audit",
-        help="Audit existing records artifacts without invoking an LLM",
-    )
-    _add_audit_arguments(audit_parser)
-    audit_parser.set_defaults(handler=handle_intel_audit)
-
     prompts_parser = intel_subparsers.add_parser("prompts", help="Prompt bundle utilities")
     prompts_subparsers = prompts_parser.add_subparsers(dest="prompt_command")
 
@@ -60,7 +53,11 @@ def register_intel_commands(subparsers: argparse._SubParsersAction) -> None:
         "validate",
         help="Validate prompt/profile bundle wiring",
     )
-    prompt_validate_parser.add_argument("-e", "--entity", help="Entity handle for entity-local prompt lookup")
+    prompt_validate_parser.add_argument(
+        "-e",
+        "--entity",
+        help="Entity handle for entity-local prompt lookup",
+    )
     prompt_validate_parser.add_argument(
         "-j",
         "--job-profile",
@@ -78,32 +75,57 @@ def register_intel_commands(subparsers: argparse._SubParsersAction) -> None:
 
 def _add_summarize_arguments(parser: argparse.ArgumentParser) -> None:
     """
-    Register arguments shared by the summarize command and its run alias.
+    Register arguments for Records-first summary orchestration.
 
     :param parser: Subparser to configure
     :return: None
     """
     parser.add_argument("-e", "--entity", help="Entity handle to process")
-    parser.add_argument("-i", "--txt-input", help="Path to a transcript file or directory (.txt)")
-    parser.add_argument("-o", "--output-dir", help="Directory to save final summaries")
-    parser.add_argument("-m", "--model", help="LLM model override")
+    parser.add_argument(
+        "-i",
+        "--txt-input",
+        help="Path to a source text file or directory (.txt)",
+    )
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        help="Directory to save final summaries",
+    )
+    parser.add_argument(
+        "-m",
+        "--model",
+        help="Records and summary model override",
+    )
     parser.add_argument(
         "--llm-provider",
         help="LLM provider override (e.g. ollama, llamacpp, openai, anthropic, codex_cli)",
     )
-    parser.add_argument("--llm-provider-url", help="LLM provider URL or executable target override")
+    parser.add_argument(
+        "--llm-provider-url",
+        help="LLM provider URL or executable target override",
+    )
     parser.add_argument(
         "--llm-api-key",
         help="LLM API key override; prefer llm_api_key_env or YATSEE_LLM_API_KEY",
     )
-    parser.add_argument("--show-pricing", action="store_true", help="Estimate reference pricing for the run")
+    parser.add_argument(
+        "--show-pricing",
+        action="store_true",
+        help="Estimate reference pricing for Records and summary generation",
+    )
     parser.add_argument(
         "--no-show-pricing",
         action="store_true",
         help="Disable reference pricing even if enabled in config",
     )
-    parser.add_argument("--pricing-provider", help="Reference provider for pricing (e.g. openai, anthropic)")
-    parser.add_argument("--pricing-model", help="Reference model for pricing (e.g. gpt-5.4, claude-sonnet-4)")
+    parser.add_argument(
+        "--pricing-provider",
+        help="Reference provider for pricing (e.g. openai, anthropic)",
+    )
+    parser.add_argument(
+        "--pricing-model",
+        help="Reference model for pricing (e.g. gpt-5.4, claude-sonnet-4)",
+    )
     parser.add_argument(
         "-f",
         "--output-format",
@@ -114,37 +136,62 @@ def _add_summarize_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "-j",
         "--job-profile",
-        default="civic",
-        help="Prompt/profile name for intelligence routing",
+        default=None,
+        help=(
+            "Prompt/profile name. Defaults to civic for entity runs and is "
+            "required for standalone input."
+        ),
     )
     parser.add_argument(
         "-s",
         "--chunk-style",
         choices=["word", "sentence", "density"],
-        default="word",
-        help="Chunk boundary method",
+        default="sentence",
+        help="Chunk boundary method for structured summary facts",
     )
-    parser.add_argument("-w", "--max-words", type=int, help="Approximate word count threshold for chunking")
-    parser.add_argument("-t", "--max-tokens", type=int, help="Approximate max tokens per chunk")
-    parser.add_argument("-p", "--max-pass", type=int, default=3, help="Maximum summarization passes")
+    parser.add_argument(
+        "-w",
+        "--max-words",
+        type=int,
+        help="Approximate word threshold for structured summary chunks",
+    )
+    parser.add_argument(
+        "-t",
+        "--max-tokens",
+        type=int,
+        help="Approximate token threshold for structured summary chunks",
+    )
+    parser.add_argument(
+        "-p",
+        "--max-pass",
+        type=int,
+        default=3,
+        help="Maximum summary consolidation passes",
+    )
     parser.add_argument(
         "-d",
         "--disable-auto-classification",
         action="store_true",
-        help="Disable automatic meeting classification",
+        help="Use the profile's general Records route without classification",
     )
-    parser.add_argument("--first-prompt", help="Prompt ID for first pass")
-    parser.add_argument("--second-prompt", help="Prompt ID for multi-pass chunk summaries")
-    parser.add_argument("--final-prompt", help="Prompt ID for final summary pass")
-    parser.add_argument("--context", default="", help="Optional human-readable meeting context")
-    parser.add_argument("--print-prompts", action="store_true", help="Print prompt templates and exit")
+    parser.add_argument("--first-prompt", help="Prompt ID for first consolidation pass")
+    parser.add_argument("--second-prompt", help="Prompt ID for later consolidation passes")
+    parser.add_argument("--final-prompt", help="Prompt ID for final summary synthesis")
+    parser.add_argument(
+        "--context",
+        default="",
+        help="Optional human-readable source context",
+    )
+    parser.add_argument(
+        "--print-prompts",
+        action="store_true",
+        help="Print summary prompt templates and exit",
+    )
     parser.add_argument(
         "--enable-chunk-writer",
         action="store_true",
-        help="Write intermediate chunk summaries for debugging",
+        help="Write intermediate summary chunks for debugging",
     )
-
-
 
 def _add_records_arguments(parser: argparse.ArgumentParser) -> None:
     """
@@ -166,8 +213,16 @@ def _add_records_arguments(parser: argparse.ArgumentParser) -> None:
         "--llm-api-key",
         help="LLM API key override; prefer llm_api_key_env or YATSEE_LLM_API_KEY",
     )
-    parser.add_argument("--show-pricing", action="store_true", help="Estimate reference pricing for the run")
-    parser.add_argument("--no-show-pricing", action="store_true", help="Disable configured reference pricing")
+    parser.add_argument(
+        "--show-pricing",
+        action="store_true",
+        help="Estimate reference pricing for the run",
+    )
+    parser.add_argument(
+        "--no-show-pricing",
+        action="store_true",
+        help="Disable configured reference pricing",
+    )
     parser.add_argument("--pricing-provider", help="Reference provider for pricing")
     parser.add_argument("--pricing-model", help="Reference model for pricing")
     parser.add_argument("-j", "--job-profile", default="civic", help="Prompt/profile name")
@@ -188,7 +243,11 @@ def _add_records_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--meeting-type", help="Explicit records meeting-type route")
     parser.add_argument("--context", default="", help="Optional human-readable meeting context")
-    parser.add_argument("--print-prompts", action="store_true", help="Print records prompts and exit")
+    parser.add_argument(
+        "--print-prompts",
+        action="store_true",
+        help="Print records prompts and exit",
+    )
     parser.add_argument(
         "--force",
         action="store_true",
@@ -244,95 +303,6 @@ def _add_events_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 
-def _add_audit_arguments(parser: argparse.ArgumentParser) -> None:
-    """
-    Register deterministic records-audit arguments.
-
-    :param parser: Audit subparser to configure
-    :return: None
-    """
-    parser.add_argument(
-        "-e",
-        "--entity",
-        required=True,
-        help="Entity handle whose records corpus should be audited",
-    )
-    parser.add_argument(
-        "-m",
-        "--model",
-        help="Configured records model/output directory override",
-    )
-    parser.add_argument(
-        "-o",
-        "--output-dir",
-        help="Audit report directory override",
-    )
-    parser.add_argument(
-        "-i",
-        "--meeting",
-        dest="meeting_filter",
-        help="Audit only meeting directories containing this text",
-    )
-    profile_group = parser.add_mutually_exclusive_group()
-    profile_group.add_argument(
-        "--profile",
-        dest="audit_profile",
-        choices=["balanced", "strict"],
-        default="balanced",
-        help=(
-            "Audit sensitivity profile; balanced is calibrated for practical "
-            "small-model extraction"
-        ),
-    )
-    profile_group.add_argument(
-        "--strict",
-        dest="audit_profile",
-        action="store_const",
-        const="strict",
-        help="Alias for --profile strict",
-    )
-    rebuild_group = parser.add_mutually_exclusive_group()
-    rebuild_group.add_argument(
-        "--rebuild",
-        dest="rebuild_mode",
-        action="store_const",
-        const="plan",
-        help=(
-            "Calculate structurally justified meeting rebuild candidates, write "
-            "a manifest, and stop without invoking an LLM"
-        ),
-    )
-    rebuild_group.add_argument(
-        "--rebuild-auto",
-        dest="rebuild_mode",
-        action="store_const",
-        const="auto",
-        help=(
-            "Attempt each structurally justified meeting rebuild once, then "
-            "rerun the audit without retrying remaining failures"
-        ),
-    )
-    parser.add_argument(
-        "--format",
-        dest="output_format",
-        choices=["all", "json", "csv", "markdown"],
-        default="all",
-        help="Report format to write",
-    )
-    parser.add_argument(
-        "--top",
-        type=int,
-        default=20,
-        help="Maximum detailed meetings in the Markdown review queue",
-    )
-    parser.add_argument(
-        "--min-risk",
-        type=int,
-        default=1,
-        help="Minimum risk score for detailed Markdown findings",
-    )
-
-
 
 def handle_intel_events(args: argparse.Namespace) -> int:
     """
@@ -348,16 +318,21 @@ def handle_intel_events(args: argparse.Namespace) -> int:
         entity=args.entity,
         model=args.model,
         output_dir=args.output_dir,
-        meeting_filter=args.meeting_filter,
+        input_path=args.txt_input,
     )
 
-    print(f"Entity: {result['entity']}")
+    print(f"Input: {result['input_dir']}")
+    if result.get("entity"):
+        print(f"Entity: {result['entity']}")
     print(f"Model: {result['model']}")
     print(f"Records directory: {result['records_dir']}")
     print(f"Events output directory: {result['output_dir']}")
-    print(f"Meetings discovered: {result['discovered']}")
-    print(f"Meetings processed: {result['processed']}")
-    print(f"Meetings skipped: {result['skipped']}")
+    print(f"Sources discovered: {result['discovered']}")
+    print(f"Records extracted: {result['records_extracted']}")
+    print(f"Records reused: {result['records_reused']}")
+    print(f"Events refreshed: {result['events_processed']}")
+    print(f"Summaries written: {result['processed']}")
+    print(f"Sources skipped: {result['skipped']}")
     print(f"Source records: {result['source_record_count']}")
     print(f"Events generated: {result['event_count']}")
     print(f"Decision events: {result['decision_event_count']}")
@@ -392,77 +367,6 @@ def handle_intel_events(args: argparse.Namespace) -> int:
         print(f"- Skipped {item['meeting']}: {item['reason']}")
     return 0
 
-
-def handle_intel_audit(args: argparse.Namespace) -> int:
-    """
-    Audit existing records artifacts and print a compact corpus report.
-
-    :param args: Parsed CLI arguments
-    :return: Process exit code
-    """
-    from yatsee.intel.audit import run_records_audit
-
-    result = run_records_audit(
-        global_config_path=args.config,
-        entity=args.entity,
-        model=args.model,
-        output_dir=args.output_dir,
-        meeting_filter=args.meeting_filter,
-        output_format=args.output_format,
-        top=args.top,
-        min_risk=args.min_risk,
-        audit_profile=args.audit_profile,
-        rebuild_mode=args.rebuild_mode,
-    )
-
-    print(f"Entity: {result['entity']}")
-    print(f"Model: {result['model']}")
-    print(f"Audit profile: {result['audit_profile']}")
-    print(f"Records directory: {result['records_dir']}")
-    print(f"Audit output directory: {result['output_dir']}")
-    print(f"Meetings audited: {result['meeting_count']}")
-    print(f"Meetings with findings: {result['meetings_with_findings']}")
-    print(
-        "Findings: "
-        f"{result['critical_findings']} critical, "
-        f"{result['high_findings']} high, "
-        f"{result['medium_findings']} medium, "
-        f"{result['low_findings']} low"
-    )
-    for report_format, report_path in sorted(result["report_paths"].items()):
-        print(f"{report_format.title()} report: {report_path}")
-
-    if result.get("rebuild_mode"):
-        print(
-            "Rebuild candidates: "
-            f"{result['rebuild_candidate_count']} "
-            f"({result['rebuildable_count']} rebuildable, "
-            f"{result['rebuild_blocked_count']} blocked)"
-        )
-        for candidate in result["rebuild_plan"]["candidates"]:
-            disposition = "rebuildable" if candidate["rebuildable"] else "blocked"
-            print(f"- {candidate['meeting']} ({disposition})")
-            for reason in candidate["reasons"]:
-                print(f"  Reason: {reason['code']} — {reason['message']}")
-            for blocker in candidate.get("blockers", []):
-                print(f"  Blocker: {blocker}")
-        print(f"Rebuild manifest: {result['rebuild_manifest_path']}")
-
-    if result.get("rebuild_execution_summary"):
-        summary = result["rebuild_execution_summary"]
-        print(
-            "Rebuild execution: "
-            f"{summary['attempted']} attempted, "
-            f"{summary['complete']} complete, "
-            f"{summary['incomplete']} incomplete, "
-            f"{summary['failed']} failed, "
-            f"{summary['blocked']} blocked"
-        )
-        print(
-            "Remaining rebuild candidates: "
-            f"{result['remaining_rebuild_candidate_count']}"
-        )
-    return 0
 
 
 def handle_intel_run(args: argparse.Namespace) -> int:
@@ -514,11 +418,20 @@ def handle_intel_run(args: argparse.Namespace) -> int:
             print()
         return 0
 
-    print(f"Input directory: {result['input_dir']}")
+    print(f"Input: {result['input_dir']}")
+    if result.get("entity"):
+        print(f"Entity: {result['entity']}")
+    print(f"Records directory: {result['records_dir']}")
+    print(f"Events directory: {result['events_dir']}")
     print(f"Output directory: {result['output_dir']}")
     print(f"Provider: {result.get('llm_provider', '(unknown)')}")
     print(f"Model: {result['model']}")
-    print(f"Processed transcripts: {result['processed']}")
+    print(f"Sources discovered: {result['discovered']}")
+    print(f"Records extracted: {result['records_extracted']}")
+    print(f"Records reused: {result['records_reused']}")
+    print(f"Events refreshed: {result['events_processed']}")
+    print(f"Summaries written: {result['processed']}")
+    print(f"Sources skipped: {result['skipped']}")
     print(f"Prompt file: {result['prompt_file'] or 'inline fallback prompts'}")
     print(f"Used fallback prompts: {result['used_fallback_prompts']}")
     print(f"Show pricing: {result.get('show_pricing', False)}")
@@ -526,7 +439,11 @@ def handle_intel_run(args: argparse.Namespace) -> int:
     pricing_provider = result.get("pricing_provider")
     pricing_model = result.get("pricing_model")
     if pricing_provider or pricing_model:
-        print(f"Pricing reference: {pricing_provider or '(default provider)'} / {pricing_model or '(default model)'}")
+        print(
+            "Pricing reference: "
+            f"{pricing_provider or '(default provider)'} / "
+            f"{pricing_model or '(default model)'}"
+        )
 
     for item in result["results"]:
         print(f"- {item['base_name']}")
@@ -535,6 +452,18 @@ def handle_intel_run(args: argparse.Namespace) -> int:
         print(
             f"  Tokens: in={item['input_tokens']} "
             f"out={item['output_tokens']} total={item['total_tokens']}"
+        )
+        print(
+            "  Structured input/reduced: "
+            f"{item['structured_input_tokens']}/{item['reduced_tokens']}"
+        )
+        print(
+            "  Reduction passes/chunks: "
+            f"{item['pass_count']} / "
+            + ", ".join(str(count) for count in item["chunk_counts"])
+        )
+        print(
+            f"  Records/events: {item['record_count']}/{item['event_count']}"
         )
 
         pricing = item.get("pricing", {})
@@ -550,6 +479,9 @@ def handle_intel_run(args: argparse.Namespace) -> int:
                     f"  Reference pricing ({ref_provider}/{ref_model}): "
                     f"${estimated_cost:.4f}"
                 )
+
+    for item in result["skipped_results"]:
+        print(f"- Skipped {item['meeting']}: {item['reason']}")
 
     return 0
 
